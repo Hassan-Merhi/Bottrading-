@@ -5,14 +5,21 @@
     python -m bots.main update                # top up the latest candles
     python -m bots.main status                # what data is stored
     python -m bots.main evolve                # run evolution and write a report
+    python -m bots.main run                   # always-on worker + dashboard (PAPER by default)
+    python -m bots.main dashboard             # dashboard only
+    python -m bots.main report                # print today's report
+    python -m bots.main backup                # copy the database to backups/
+    python -m bots.main watchdog              # alert if the worker stopped reporting
+    python -m bots.main confirm-live          # owner: re-confirm after a crash or kill switch
 
-Phases 5–9 (RiskGuard, paper trader, reporting, deployment, live) are not
-built yet. Nothing here places orders.
+Only RiskGuard (bots/risk/guard.py) can place orders.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import threading
 
 import pandas as pd
 
@@ -95,6 +102,86 @@ def cmd_evolve(cfg, conn, args) -> None:
     print(f"Report written to {out}")
 
 
+def _start_dashboard(cfg, db_path) -> None:
+    import uvicorn
+
+    from bots.report.dashboard import create_app
+
+    port = int(os.environ.get("PORT") or cfg["dashboard"]["port"])
+    uvicorn.run(create_app(db_path, cfg), host=cfg["dashboard"]["host"], port=port,
+                log_level="warning")
+
+
+def cmd_run(cfg, conn, args) -> None:
+    from bots.worker import Worker
+
+    db_path = resolve_path(cfg["database_path"])
+    conn.close()
+    if not args.no_dashboard:
+        threading.Thread(target=_start_dashboard, args=(cfg, db_path), daemon=True).start()
+    Worker(cfg, dict(os.environ), db_path).run_forever()
+
+
+def cmd_dashboard(cfg, conn, args) -> None:
+    conn.close()
+    _start_dashboard(cfg, resolve_path(cfg["database_path"]))
+
+
+def cmd_report(cfg, conn, args) -> None:
+    from bots.report.daily import daily_report_text
+    from bots.risk.state import now_ms
+
+    print(daily_report_text(conn, now_ms()))
+
+
+def cmd_backup(cfg, conn, args) -> None:
+    from bots.worker import backup_database
+
+    w = cfg["worker"]
+    print(backup_database(resolve_path(cfg["database_path"]), resolve_path(w["backups_dir"]),
+                          w["backups_keep"]))
+
+
+def cmd_watchdog(cfg, conn, args) -> None:
+    from bots.report.telegram import make_alerter
+    from bots.risk.state import HEARTBEAT, RiskState, now_ms
+
+    hb = RiskState(conn).get(HEARTBEAT)
+    age_h = (now_ms() - int(hb)) / 3_600_000 if hb else float("inf")
+    if age_h > cfg["risk"]["heartbeat_hours"]:
+        make_alerter(cfg).alert(f"System has not reported in {age_h:.1f} hours.",
+                                kind="critical")
+        sys.exit(1)
+    print(f"OK: last report {age_h * 60:.0f} min ago")
+
+
+def cmd_confirm_live(cfg, conn, args) -> None:
+    """The owner's confirmation. Clears the crash lock and, with a fresh
+    LIVE_CONFIRMED.txt, the kill switch. Never raises any limit."""
+    from bots.risk.guard import confirm_file_path, read_confirmed_capital, risk_config_problems
+    from bots.risk.state import CRASH_LOCK, KILL_SWITCH, LIVE_EPOCH, RiskState
+
+    state = RiskState(conn)
+    path = confirm_file_path(dict(os.environ))
+    problems = risk_config_problems(cfg)
+    confirmed = read_confirmed_capital(path)
+    cap = cfg["risk"].get("max_total_capital_usd")
+    if state.is_set(KILL_SWITCH):
+        if problems or confirmed is None or confirmed != cap or not cap:
+            sys.exit(f"Kill switch stays on. Write the capital limit ({cap}) into a NEW {path} "
+                     "first; the old file was revoked by the kill switch.")
+        state.clear(KILL_SWITCH)
+        state.set(LIVE_EPOCH, int(state.get(LIVE_EPOCH, "1")) + 1)
+        state.log("owner_confirmed", f"kill switch cleared by owner; capital {confirmed}")
+        print("Kill switch cleared. Live losses are counted from zero again.")
+    if state.is_set(CRASH_LOCK):
+        state.clear(CRASH_LOCK)
+        state.log("owner_confirmed", "crash lock cleared by owner")
+        print("Crash lock cleared.")
+    print("LIVE still also needs: MODE=LIVE env, live_enabled: true, LIVE_CONFIRMED.txt matching "
+          "max_total_capital_usd, and a verified Kraken key. Anything missing keeps PAPER.")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="bots")
     p.add_argument("--config", help="path to config.yaml")
@@ -112,6 +199,13 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--seed", type=int)
     ev.add_argument("--synthetic", action="store_true",
                     help="use random-walk data to check the pipeline (results are meaningless)")
+    run = sub.add_parser("run", help="always-on worker (+ dashboard)")
+    run.add_argument("--no-dashboard", action="store_true")
+    sub.add_parser("dashboard", help="serve the dashboard only")
+    sub.add_parser("report", help="print today's report")
+    sub.add_parser("backup", help="back up the database")
+    sub.add_parser("watchdog", help="alert if the worker has stopped reporting")
+    sub.add_parser("confirm-live", help="owner confirmation after a crash or kill switch")
     args = p.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -121,7 +215,9 @@ def main(argv: list[str] | None = None) -> None:
         db_path = db_path.with_name("synthetic.db")
     conn = connect(db_path)
     {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update,
-     "status": cmd_status, "evolve": cmd_evolve}[args.cmd](cfg, conn, args)
+     "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
+     "report": cmd_report, "backup": cmd_backup, "watchdog": cmd_watchdog,
+     "confirm-live": cmd_confirm_live}[args.cmd](cfg, conn, args)
 
 
 if __name__ == "__main__":

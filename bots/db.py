@@ -64,8 +64,86 @@ CREATE TABLE IF NOT EXISTS candidates (
     validation_json TEXT NOT NULL,
     test_json TEXT NOT NULL,
     passed_test INTEGER NOT NULL,
-    stage TEXT NOT NULL,              -- test_failed | awaiting_paper
+    stage TEXT NOT NULL,              -- test_failed | awaiting_paper | deployed
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS population (   -- final generation of each run, for the leaderboard
+    run_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    genome_json TEXT NOT NULL,
+    fitness REAL NOT NULL,
+    summary_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, rank)
+);
+
+CREATE TABLE IF NOT EXISTS deployed_bots (
+    bot_id TEXT PRIMARY KEY,
+    genome_json TEXT NOT NULL,
+    genome_hash TEXT NOT NULL,
+    status TEXT NOT NULL,             -- paper | ready_to_graduate | approved | live | retired
+    status_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS accounts (     -- one per bot per mode; live accounts are kept forever
+    account_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id TEXT NOT NULL,
+    mode TEXT NOT NULL,               -- paper | live
+    active INTEGER NOT NULL,
+    epoch INTEGER NOT NULL,           -- live confirmation epoch the account belongs to
+    allocation REAL NOT NULL,
+    cash REAL NOT NULL,
+    qty REAL NOT NULL DEFAULT 0,
+    entry_price REAL,
+    entry_cost REAL,                  -- cash spent on the open position, fee included
+    entry_ts INTEGER,
+    stop_price REAL,
+    target_price REAL,
+    stop_order_id TEXT,
+    protected REAL NOT NULL DEFAULT 0,
+    peak_equity REAL NOT NULL,
+    max_drawdown REAL NOT NULL DEFAULT 0,
+    last_equity REAL NOT NULL,
+    day INTEGER NOT NULL DEFAULT 0,
+    day_start_equity REAL NOT NULL,
+    trades_today INTEGER NOT NULL DEFAULT 0,
+    trades INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    fees REAL NOT NULL DEFAULT 0,
+    hold_start_price REAL,
+    last_candle_ts INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL,      -- ms
+    closed_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS fills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL,
+    bot_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    pair TEXT NOT NULL,
+    side TEXT NOT NULL,
+    qty REAL NOT NULL,
+    price REAL NOT NULL,
+    fee REAL NOT NULL,
+    pnl REAL,                         -- set on sells
+    reason TEXT NOT NULL,
+    order_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS risk_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    detail TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS risk_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -74,7 +152,10 @@ def connect(path: str | Path) -> sqlite3.Connection:
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    # Each thread (trader, dashboard) opens its own connection; WAL lets them coexist.
+    conn = sqlite3.connect(str(path), timeout=30)
     conn.row_factory = sqlite3.Row
+    if str(path) != ":memory:":
+        conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     return conn

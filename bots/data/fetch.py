@@ -23,6 +23,7 @@ import pandas as pd
 
 from bots.data.store import get_meta, set_meta, upsert_candles
 
+BACKFILL_DONE = "backfill_done"
 TIMEFRAME_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000,
                 "1d": 86_400_000}
 
@@ -155,3 +156,4 @@ def backfill_all(conn: sqlite3.Connection, cfg: dict, log: Callable[[str], None]
         backfill_from_trades(conn, exchange, pair, tf, since_ms, progress=progress)
         n = update_recent(conn, exchange, pair, tf)
         log(f"  {pair}: done ({n} recent candles topped up)")
+    set_meta(conn, BACKFILL_DONE, str(int(time.time() * 1000)))

@@ -75,7 +75,9 @@ graduation:
 # ---------------------------------------------------------------------------
 # RISK RULES (section 6). Non-negotiable. Ask the owner before changing.
 # ---------------------------------------------------------------------------
-mode: PAPER                              # LIVE also needs MODE=LIVE env + LIVE_CONFIRMED.txt
+# Mode is PAPER unless ALL THREE hold: env MODE=LIVE, live_enabled: true below,
+# and LIVE_CONFIRMED.txt (project root) containing max_total_capital_usd typed
+# by the owner. Missing or unclear anything -> PAPER.
 live_enabled: false
 risk:
   max_total_capital_usd: 0               # 0 = paper only. Hard ceiling in code: 100
@@ -85,3 +87,29 @@ risk:
   total_drawdown_kill_usd: 10
   house_money_multiple: 2                # at 2x allocation, original stake becomes protected
   heartbeat_hours: 2
+
+# ---------------------------------------------------------------------------
+# Paper trading (section 5, step 3) and the always-on worker
+# ---------------------------------------------------------------------------
+paper:
+  allocation_usd: 20                     # fake money per paper bot
+  max_bots: 10                           # paper bots running at once
+  candles: 720                           # recent candles fetched for signals
+  retire_drawdown_pct: 25                # a paper bot this far under water retires
+
+worker:
+  poll_seconds: 60                       # trading loop interval
+  evolution_hour_utc: 2                  # nightly evolution
+  daily_report_hour_utc: 8
+  backup_hour_utc: 3
+  backups_dir: backups
+  backups_keep: 14
+  healthy_ticks_to_resume: 3             # after an API/data error, healthy loops before new entries resume
+  max_candle_age_multiple: 3             # latest closed candle older than this many timeframes = stale data
+
+telegram:
+  alert_throttle_minutes: 60             # identical alerts are sent at most this often
+
+dashboard:
+  host: 0.0.0.0
+  port: 8000                             # overridden by $PORT when set

@@ -182,6 +182,7 @@ class EvolutionRun:
                               reverse=True)
                 population = self._next_generation(gen, bots, result,
                                                    last=gen == self.ecfg["generations"] - 1)
+            self._save_population(bots)
             result.finalists = self._final_checks(bots)
         finally:
             if pool is not None:
@@ -235,6 +236,14 @@ class EvolutionRun:
         self._fill(population, size - n_new, lambda: self._offspring(elites))
         self._fill(population, size, self._newcomer)
         return population
+
+    def _save_population(self, bots: list[Bot]) -> None:
+        self.conn.executemany(
+            "INSERT INTO population (run_id, rank, genome_json, fitness, summary_json) "
+            "VALUES (?,?,?,?,?)",
+            [(self.run_id, i, b.genome.to_json(), b.fitness, json.dumps(b.evaluation.summary()))
+             for i, b in enumerate(bots)])
+        self.conn.commit()
 
     # -- validation and the one-time test check ---------------------------
 

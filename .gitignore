@@ -1,8 +1,11 @@
-__pycache__/
-*.pyc
-.pytest_cache/
 *.db
 *.db-journal
-runs/
+*.db-wal
+*.db-shm
+*.pyc
 .env
-LIVE_CONFIRMED.txt
+.pytest_cache/
+LIVE_CONFIRMED*.txt
+__pycache__/
+backups/
+runs/
