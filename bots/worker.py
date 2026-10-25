@@ -23,6 +23,8 @@ from pathlib import Path
 from bots.config import PROJECT_DIR, resolve_path
 from bots.data.fetch import BACKFILL_DONE, make_exchange
 from bots.data.store import get_meta
+from bots.analyst.digest import for_telegram, latest_digest
+from bots.data.mood import update_fear_greed
 from bots.db import connect
 from bots.live.exchange import (WithdrawalPermissionError, check_can_query, check_cannot_withdraw,
                                 has_api_keys, make_live_exchange)
@@ -136,7 +138,10 @@ class Worker:
     def _command(self, cmd: str) -> str:
         if cmd in ("/status", "/report"):
             return daily_report_text(self.conn, now_ms())
-        return "Commands: /status"
+        if cmd == "/digest":
+            row = latest_digest(self.conn)
+            return for_telegram(row["text"]) if row else "No briefing yet today."
+        return "Commands: /status, /digest"
 
     def _due(self, name: str, hour: int) -> bool:
         now = datetime.now(timezone.utc)
@@ -148,6 +153,16 @@ class Worker:
 
     def _scheduled(self) -> None:
         w = self.cfg["worker"]
+        hour = datetime.now(timezone.utc).strftime("%Y-%m-%d %H")
+        if self.state.get("last_mood_update") != hour:
+            self.state.set("last_mood_update", hour)
+            try:
+                update_fear_greed(self.conn)
+            except Exception as e:  # noqa: BLE001 - stale mood blocks mood-filtered entries
+                print(f"Fear & Greed update failed: {e}")
+        acfg = self.cfg.get("analyst") or {}
+        if acfg.get("enabled") and self._due("digest", acfg["hour_utc"]):
+            self._spawn("digest")  # sends its own Telegram message
         if self._due("report", w["daily_report_hour_utc"]):
             self.alerter.alert(daily_report_text(self.conn, now_ms()), kind="report")
         if self._due("backup", w["backup_hour_utc"]):

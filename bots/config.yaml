@@ -58,7 +58,7 @@ fitness:
   consistency_weight: 0.5                # fitness = mean(window scores) - w * std(window scores)
 
 graveyard:
-  similarity_radius: 0.08                # genome distance (0–1) counted as "too similar"
+  similarity_radius: 0.055               # genome distance (0–1) counted as "too similar"
   saturation: 5                          # this many similar deaths of one cause = full penalty
   penalty: 0.5                           # max fitness penalty
 
@@ -108,7 +108,27 @@ worker:
   max_candle_age_multiple: 3             # latest closed candle older than this many timeframes = stale data
 
 telegram:
-  alert_throttle_minutes: 60             # identical alerts are sent at most this often
+  alert_throttle_minutes: 60
+
+# ---------------------------------------------------------------------------
+# AI analyst: a daily news briefing sent to you. Information only; the trading
+# bots never read it. Uses Claude when ANTHROPIC_API_KEY is set, otherwise a
+# plain headline digest.
+# ---------------------------------------------------------------------------
+analyst:
+  enabled: true
+  hour_utc: 7
+  model: claude-opus-5-5
+  effort: medium
+  lookback_hours: 24
+  max_items: 60
+  rss_feeds:
+    - https://www.coindesk.com/arc/outboundfeeds/rss/
+    - https://cointelegraph.com/rss
+    - https://decrypt.co/feed
+  # Public Telegram channels you choose, by username (read from t.me/s/<name>,
+  # no account login). Example: [some_news_channel]
+  telegram_channels: []             # identical alerts are sent at most this often
 
 dashboard:
   host: 0.0.0.0

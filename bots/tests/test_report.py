@@ -111,3 +111,16 @@ def test_daily_report_text(conn):
     RiskState(conn).log("order_refused", "b1 refused: test")
     text = daily_report_text(conn, now_ms())
     assert "Daily report" in text and "Paper" in text and "refused" in text
+
+
+def test_dashboard_shows_mood_and_briefing(dash):
+    client, db = dash
+    conn = connect(db)
+    conn.execute("INSERT INTO fear_greed (ts, value) VALUES (1760000000000, 23)")
+    conn.execute("INSERT INTO analyst_digests (ts, items, used_ai, text) VALUES "
+                 "(1760000000000, 5, 1, 'Mood: <b>fearful</b>')")
+    conn.commit()
+    page = client.get("/").text
+    assert "Market mood and AI analyst" in page and "<b>23</b>/100" in page
+    assert "Mood: &lt;b&gt;fearful&lt;/b&gt;" in page  # untrusted text is escaped
+    assert "never read it" in page

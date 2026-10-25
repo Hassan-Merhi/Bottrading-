@@ -12,7 +12,9 @@ from dataclasses import asdict, dataclass, fields
 
 PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD")
 TIMEFRAMES = ("15m", "1h", "4h")
-ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd")
+ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd", "volume_spike",
+               "squeeze_breakout")
+TREND_FILTERS = ("none", "own_daily", "btc_daily")
 
 # name -> (low, high, is_integer)
 NUMERIC_GENES: dict[str, tuple[float, float, bool]] = {
@@ -25,13 +27,22 @@ NUMERIC_GENES: dict[str, tuple[float, float, bool]] = {
     "take_profit_pct": (1.0, 15.0, False),
     "position_size_pct": (10.0, 100.0, False),
     "max_trades_per_day": (1, 10, True),
+    "vol_mult": (1.5, 5.0, False),       # volume_spike: volume vs its average
+    "trend_period": (20, 200, True),     # trend filter: days in the daily moving average
+    "mood_min": (0, 90, True),           # Fear & Greed window for entries;
+    "mood_max": (10, 100, True),         # 0..100 means the mood filter is off
 }
 CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
     "pair": PAIRS,
     "timeframe": TIMEFRAMES,
     "entry_type": ENTRY_TYPES,
+    "trend_filter": TREND_FILTERS,
 }
 MIN_FAST_SLOW_GAP = 5
+MIN_MOOD_SPAN = 10
+# Values for genes added after the first release, so stored genomes still load.
+DEFAULTS = {"vol_mult": 2.0, "trend_period": 50, "mood_min": 0, "mood_max": 100,
+            "trend_filter": "none"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +59,15 @@ class Genome:
     take_profit_pct: float
     position_size_pct: float
     max_trades_per_day: int
+    vol_mult: float = 2.0
+    trend_period: int = 50
+    mood_min: int = 0
+    mood_max: int = 100
+    trend_filter: str = "none"
+
+    @property
+    def mood_filter_on(self) -> bool:
+        return self.mood_min > 0 or self.mood_max < 100
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -57,7 +77,7 @@ class Genome:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Genome":
-        return repair({f.name: d[f.name] for f in fields(cls)})
+        return repair({f.name: d.get(f.name, DEFAULTS.get(f.name)) for f in fields(cls)})
 
     def hash(self) -> str:
         return hashlib.sha256(self.to_json().encode()).hexdigest()[:16]
@@ -69,21 +89,32 @@ class Genome:
             "rsi_reversion": f"RSI rebound above {self.rsi_low}, exit above {self.rsi_high}",
             "breakout": f"{self.breakout_window}-candle breakout",
             "macd": f"MACD {self.fast_period}/{self.slow_period}/9 cross",
+            "volume_spike": f"volume {self.vol_mult:.1f}x spike + {self.fast_period}-candle high",
+            "squeeze_breakout": f"{self.breakout_window}-candle volatility squeeze breakout",
         }[self.entry_type]
-        return (f"{self.pair} {self.timeframe} {rule}; stop {self.stop_loss_pct:.2f}%, "
+        filters = ""
+        if self.trend_filter != "none":
+            ref = self.pair.split("/")[0] if self.trend_filter == "own_daily" else "BTC"
+            filters += f"; only when {ref} > {self.trend_period}-day average"
+        if self.mood_filter_on:
+            filters += f"; only when Fear & Greed is {self.mood_min}-{self.mood_max}"
+        return (f"{self.pair} {self.timeframe} {rule}{filters}; stop {self.stop_loss_pct:.2f}%, "
                 f"target {self.take_profit_pct:.2f}%, size {self.position_size_pct:.0f}%, "
                 f"max {self.max_trades_per_day}/day")
 
 
 def repair(values: dict) -> Genome:
     """Clip every gene into its allowed range and enforce fast < slow."""
-    v = dict(values)
+    v = {**DEFAULTS, **values}
     for name, options in CATEGORICAL_GENES.items():
         if v[name] not in options:
             raise ValueError(f"{name}={v[name]!r} is not one of {options}")
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         x = min(max(float(v[name]), lo), hi)
         v[name] = int(round(x)) if is_int else round(x, 3)
+    if v["mood_max"] < v["mood_min"] + MIN_MOOD_SPAN:
+        v["mood_max"] = min(100, v["mood_min"] + MIN_MOOD_SPAN)
+        v["mood_min"] = min(v["mood_min"], v["mood_max"] - MIN_MOOD_SPAN)
     if v["slow_period"] < v["fast_period"] + MIN_FAST_SLOW_GAP:
         v["slow_period"] = min(NUMERIC_GENES["slow_period"][1],
                                v["fast_period"] + MIN_FAST_SLOW_GAP)
@@ -97,9 +128,12 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Gen
         "pair": rng.choice(tuple(pairs)),
         "timeframe": rng.choice(tuple(timeframes)),
         "entry_type": rng.choice(ENTRY_TYPES),
+        "trend_filter": rng.choice(TREND_FILTERS),
     }
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         v[name] = rng.randint(int(lo), int(hi)) if is_int else rng.uniform(lo, hi)
+    if rng.random() < 0.5:  # half the newcomers ignore market mood
+        v["mood_min"], v["mood_max"] = 0, 100
     return repair(v)
 
 
@@ -107,7 +141,8 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
            categorical_rate: float = 0.05, pairs=PAIRS, timeframes=TIMEFRAMES) -> Genome:
     """Small random changes: numeric genes move by about ±scale of their value."""
     v = g.to_dict()
-    options = {"pair": tuple(pairs), "timeframe": tuple(timeframes), "entry_type": ENTRY_TYPES}
+    options = {"pair": tuple(pairs), "timeframe": tuple(timeframes), "entry_type": ENTRY_TYPES,
+               "trend_filter": TREND_FILTERS}
     for name in CATEGORICAL_GENES:
         if rng.random() < categorical_rate:
             v[name] = rng.choice(options[name])

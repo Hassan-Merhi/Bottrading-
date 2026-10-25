@@ -3,12 +3,14 @@
     python -m bots.main fetch                 # backfill history from Kraken public trades
     python -m bots.main import-csv FILE --pair BTC/USD --timeframe 15m
     python -m bots.main update                # top up the latest candles
+    python -m bots.main fetch-mood            # Fear & Greed Index history
     python -m bots.main status                # what data is stored
     python -m bots.main evolve                # run evolution and write a report
     python -m bots.main run                   # always-on worker + dashboard (PAPER by default)
     python -m bots.main dashboard             # dashboard only
     python -m bots.main report                # print today's report
     python -m bots.main backup                # copy the database to backups/
+    python -m bots.main digest                # AI analyst briefing (information only)
     python -m bots.main watchdog              # alert if the worker stopped reporting
     python -m bots.main confirm-live          # owner: re-confirm after a crash or kill switch
 
@@ -29,8 +31,16 @@ from bots.db import connect
 
 def cmd_fetch(cfg, conn, args) -> None:
     from bots.data.fetch import backfill_all
+    from bots.data.mood import update_fear_greed
 
+    print(f"Fear & Greed: {update_fear_greed(conn)} days stored")
     backfill_all(conn, cfg)
+
+
+def cmd_fetch_mood(cfg, conn, args) -> None:
+    from bots.data.mood import update_fear_greed
+
+    print(f"Fear & Greed: {update_fear_greed(conn)} days stored")
 
 
 def cmd_import_csv(cfg, conn, args) -> None:
@@ -92,7 +102,14 @@ def cmd_evolve(cfg, conn, args) -> None:
         missing = [p for p in dcfg["pairs"] if (p, dcfg["timeframes"][0]) not in market]
         if missing:
             print(f"Warning: no data for {missing}; evolving on the other pairs only.")
-    result = EvolutionRun(conn, cfg, market, label).run()
+    ctx = None
+    if args.synthetic:
+        from bots.data.synthetic import synthetic_fear_greed
+        from bots.strategy.context import build_context
+
+        first = min(int(sr.ts[0]) for sr in market.values())
+        ctx = build_context(market, synthetic_fear_greed(first, 2 * 366))
+    result = EvolutionRun(conn, cfg, market, label, ctx=ctx).run()
     report = render(result, conn)
     out = resolve_path("runs") / f"{result.run_id}.md"
     out.parent.mkdir(exist_ok=True)
@@ -132,6 +149,17 @@ def cmd_report(cfg, conn, args) -> None:
     from bots.risk.state import now_ms
 
     print(daily_report_text(conn, now_ms()))
+
+
+def cmd_digest(cfg, conn, args) -> None:
+    """Write today's market briefing and send it to Telegram. Information only."""
+    from bots.analyst.digest import for_telegram, run_digest
+    from bots.report.telegram import make_alerter
+
+    text = run_digest(conn, cfg)
+    print(text)
+    if not args.no_send:
+        make_alerter(cfg).alert(for_telegram(text), kind="report")
 
 
 def cmd_backup(cfg, conn, args) -> None:
@@ -192,6 +220,7 @@ def main(argv: list[str] | None = None) -> None:
     imp.add_argument("--pair", required=True)
     imp.add_argument("--timeframe", default="15m")
     sub.add_parser("update", help="top up the latest candles")
+    sub.add_parser("fetch-mood", help="download the Fear & Greed Index history")
     sub.add_parser("status", help="show stored data")
     ev = sub.add_parser("evolve", help="run evolution")
     ev.add_argument("--generations", type=int)
@@ -204,6 +233,8 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("dashboard", help="serve the dashboard only")
     sub.add_parser("report", help="print today's report")
     sub.add_parser("backup", help="back up the database")
+    dg = sub.add_parser("digest", help="AI analyst: write and send today's market briefing")
+    dg.add_argument("--no-send", action="store_true", help="print only, no Telegram message")
     sub.add_parser("watchdog", help="alert if the worker has stopped reporting")
     sub.add_parser("confirm-live", help="owner confirmation after a crash or kill switch")
     args = p.parse_args(argv)
@@ -214,9 +245,9 @@ def main(argv: list[str] | None = None) -> None:
         # Keep synthetic deaths out of the real graveyard.
         db_path = db_path.with_name("synthetic.db")
     conn = connect(db_path)
-    {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update,
+    {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update, "fetch-mood": cmd_fetch_mood,
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
-     "report": cmd_report, "backup": cmd_backup, "watchdog": cmd_watchdog,
+     "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "watchdog": cmd_watchdog,
      "confirm-live": cmd_confirm_live}[args.cmd](cfg, conn, args)
 
 

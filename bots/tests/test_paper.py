@@ -27,7 +27,7 @@ class FakeMarket:
     def fetch_ohlcv(self, pair, tf, limit=720):
         if self.fail:
             raise ConnectionError("network down")
-        step = {"15m": Q, "1h": H, "4h": 4 * H}[tf]
+        step = {"15m": Q, "1h": H, "4h": 4 * H, "1d": 24 * H}[tf]
         end = self.clock() // step * step - (10 * step if self.stale else 0)
         ts = end - step * np.arange(limit, -1, -1)  # last one is still forming
         p = self.price
@@ -48,7 +48,7 @@ def setup(cfg, conn, tmp_path, monkeypatch):
     trader = Trader(cfg, conn, guard, ReadOnlyExchange(md), paper, alerts)
     signals = {"entry": False, "exit": False}
 
-    def fake_signals(s, g):
+    def fake_signals(s, g, ctx=None):
         e = np.zeros(len(s), bool)
         x = np.zeros(len(s), bool)
         e[-1], x[-1] = signals["entry"], signals["exit"]

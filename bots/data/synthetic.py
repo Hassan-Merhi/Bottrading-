@@ -25,3 +25,11 @@ def random_walk_candles(n: int, timeframe: str = "15m", start_price: float = 30_
     ts = start_ms + np.arange(n, dtype="int64") * TIMEFRAME_MS[timeframe]
     return pd.DataFrame({"ts": ts, "open": open_, "high": high, "low": low, "close": close,
                          "volume": rng.uniform(1, 10, size=n)})
+
+
+def synthetic_fear_greed(start_ms: int, days: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """A bounded random walk standing in for the Fear & Greed Index."""
+    rng = np.random.default_rng(seed)
+    values = np.clip(50 + np.cumsum(rng.normal(0, 4, days)), 0, 100).round()
+    day0 = start_ms // 86_400_000 * 86_400_000
+    return day0 + np.arange(days, dtype="int64") * 86_400_000, values

@@ -40,7 +40,7 @@ def test_random_mutated_and_crossed_genomes_stay_in_range():
         child = crossover(a, b, rng)
         assert in_range(child)
         for k, v in child.to_dict().items():
-            if k not in ("fast_period", "slow_period"):  # these two may be repaired
+            if k not in ("fast_period", "slow_period", "mood_min", "mood_max"):  # may be repaired
                 assert v in (getattr(a, k), getattr(b, k))
 
 
@@ -93,14 +93,20 @@ def test_signals_never_use_future_candles(entry_type):
     rng = np.random.default_rng(3)
     n = 600
     c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, n)))
-    h, lo = c * 1.005, c * 0.995
+    o = np.r_[c[0], c[:-1]]
+    h, lo = np.maximum(o, c) * 1.005, np.minimum(o, c) * 0.995
+    vol = rng.lognormal(0, 0.8, n)
     g = base_genome(entry_type=entry_type, fast_period=8, slow_period=30, breakout_window=20,
-                    rsi_low=35, rsi_high=65)
-    full_e, full_x = compute_signals(make_series(c, h, lo, c), g)
+                    rsi_low=35, rsi_high=65, vol_mult=2.0)
+    full_e, full_x = compute_signals(make_series(o, h, lo, c, volume=vol), g)
     k = 400
     c2 = c.copy()
     c2[k:] = c2[k:] * rng.uniform(0.5, 1.5, n - k)
-    cut_e, cut_x = compute_signals(make_series(c2, c2 * 1.005, c2 * 0.995, c2), g)
+    o2 = np.r_[c2[0], c2[:-1]]
+    vol2 = vol.copy()
+    vol2[k:] *= 7
+    cut_e, cut_x = compute_signals(make_series(o2, np.maximum(o2, c2) * 1.005,
+                                               np.minimum(o2, c2) * 0.995, c2, volume=vol2), g)
     assert (full_e[:k] == cut_e[:k]).all() and (full_x[:k] == cut_x[:k]).all()
     assert full_e.any()
 

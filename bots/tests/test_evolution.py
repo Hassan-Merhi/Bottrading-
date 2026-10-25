@@ -84,7 +84,7 @@ def test_evolution_run_end_to_end(conn, cfg, synthetic_market):
 def test_population_size_is_constant_and_newcomers_arrive(conn, cfg, synthetic_market):
     cfg = small_cfg(cfg)
     run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
-    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg)
+    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg, run.ctx)
     pop = []
     run._fill(pop, 24, run._newcomer)
     bots = sorted(run._evaluate(pop, None), key=lambda b: b.fitness, reverse=True)
@@ -98,7 +98,7 @@ def test_population_size_is_constant_and_newcomers_arrive(conn, cfg, synthetic_m
 def test_test_set_is_used_once_per_genome(conn, cfg, synthetic_market, monkeypatch):
     cfg = small_cfg(cfg)
     run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
-    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg)
+    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg, run.ctx)
     test_calls = []
     real = run._evaluate_period
 

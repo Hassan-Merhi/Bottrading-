@@ -141,6 +141,19 @@ CREATE TABLE IF NOT EXISTS risk_events (
     detail TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fear_greed (
+    ts INTEGER PRIMARY KEY,           -- day start, ms UTC
+    value INTEGER NOT NULL            -- 0 extreme fear .. 100 extreme greed
+);
+
+CREATE TABLE IF NOT EXISTS analyst_digests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    items INTEGER NOT NULL,
+    used_ai INTEGER NOT NULL,
+    text TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS risk_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

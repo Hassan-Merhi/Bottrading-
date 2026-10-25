@@ -11,11 +11,12 @@ from bots.db import connect
 
 
 def make_series(open_, high, low, close, timeframe="1h", start_ms=1_700_000_000_000 // 3_600_000 * 3_600_000,
-                pair="BTC/USD") -> Series:
+                pair="BTC/USD", volume=None) -> Series:
     n = len(close)
     step = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000}[timeframe]
     df = pd.DataFrame({"ts": start_ms + np.arange(n, dtype="int64") * step, "open": open_,
-                       "high": high, "low": low, "close": close, "volume": np.ones(n)})
+                       "high": high, "low": low, "close": close,
+                       "volume": np.ones(n) if volume is None else volume})
     return series_from_df(pair, timeframe, df)
 
 

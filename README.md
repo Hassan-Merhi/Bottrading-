@@ -16,7 +16,7 @@ paper results never guarantee future profits.
 
 ```bash
 pip install -r requirements.txt
-python -m pytest            # 109 tests, including the section 6.8 risk proofs
+python -m pytest            # 133 tests, including the section 6.8 risk proofs
 ```
 
 ## Pipeline
@@ -46,8 +46,42 @@ The worker, every `worker.poll_seconds`:
   approved bots a live allocation when LIVE is unlocked;
 - nightly: evolution (own process), daily Telegram report, database backup.
 
-Other commands: `report`, `backup`, `watchdog` (run it from an external
-scheduler to catch a dead machine), `dashboard`, `confirm-live`.
+Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
+from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
+
+## Trader knowledge the bots can evolve to use
+
+Each is a gene, so evolution decides whether it helps. Every one must pass the
+same backtest, unseen-data check and 30-day paper gate as any other rule.
+
+- **Market mood:** the Crypto Fear & Greed Index (daily, history from 2018).
+  Bots can restrict entries to a mood range, e.g. "only buy when fearful".
+  `python -m bots.main fetch-mood` downloads the history; the worker refreshes
+  it hourly. Missing or stale mood data blocks mood-filtered entries.
+- **Trend filters:** only enter when the coin itself, or BTC, closes above its
+  N-day moving average (20–200 days).
+- **Volume and volatility:** two extra entry types: volume spike (volume N× its
+  average on a green candle making a new short-term high) and volatility
+  squeeze breakout (Bollinger band width in its lowest 20%, then a close above
+  the upper band).
+
+All of these only look at days that have fully closed, so a backtest never
+sees the future (tests check this).
+
+## AI analyst (information only)
+
+Every morning (`analyst.hour_utc`) the worker writes a market briefing from
+crypto news RSS feeds and any public Telegram channels you list in
+`analyst.telegram_channels` (read from their public web page; no account or
+group joining). With `ANTHROPIC_API_KEY` set, Claude writes it: mood, main
+themes, hype and pump-and-dump red flags, things to watch. Without a key you
+get a plain headline digest. It arrives on Telegram (`/digest` resends it) and
+on the dashboard.
+
+The analyst cannot trade. No trading module imports it, it has no access to
+RiskGuard, accounts or exchanges, and the sources are handed to Claude as
+untrusted data with instructions not to follow anything inside them. It gives
+no buy or sell calls. Run it by hand with `python -m bots.main digest`.
 
 ## Telegram and dashboard
 

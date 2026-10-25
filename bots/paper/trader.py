@@ -25,6 +25,8 @@ from bots.evolution.graveyard import Graveyard
 from bots.risk.guard import OrderFailed, OrderRefused, RiskGuard
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import HEARTBEAT
+from bots.data.mood import load_fear_greed
+from bots.strategy.context import MarketContext
 from bots.strategy.genome import Genome
 from bots.strategy.signals import compute_signals
 
@@ -159,11 +161,14 @@ class Trader:
         report = TickReport()
         now = self.clock()
         bots = self.bots()
-        needed = {(json.loads(b["genome_json"])["pair"], json.loads(b["genome_json"])["timeframe"])
-                  for b in bots}
+        genomes = [self.genome(b) for b in bots]
+        needed = {(g.pair, g.timeframe) for g in genomes}
         base = self.cfg["data"]["base_timeframe"]
         pairs = {p for p, _ in needed}
         needed |= {(p, base) for p in pairs}
+        # Daily candles for trend filters (Kraken serves 720 days, enough for a 200-day average).
+        needed |= {(g.pair if g.trend_filter == "own_daily" else "BTC/USD", "1d")
+                   for g in genomes if g.trend_filter != "none"}
         series: dict[tuple[str, str], Series] = {}
         for pair, tf in sorted(needed):
             try:
@@ -200,6 +205,8 @@ class Trader:
         if not report.healthy:
             self.guard.halt_entries("; ".join(report.errors))
 
+        ctx = MarketContext(daily={p: sr for (p, tf), sr in series.items() if tf == "1d"},
+                            fear_greed=load_fear_greed(self.conn))
         self._ensure_accounts(prices)
         self._restore_now()
         for bot in self.bots():
@@ -208,7 +215,7 @@ class Trader:
             for mode in modes:
                 try:
                     self._run_bot(bot, g, mode, series.get((g.pair, g.timeframe)),
-                                  prices.get(g.pair), report)
+                                  prices.get(g.pair), report, ctx)
                 except (OrderRefused, OrderFailed) as e:
                     report.errors.append(f"{bot['bot_id']}: {e}")
         # Live bots keep being managed in PAPER mode (e.g. after a crash): exits and stops
@@ -223,7 +230,7 @@ class Trader:
         return report
 
     def _run_bot(self, bot, g: Genome, mode: str, s: Series | None, price: float | None,
-                 report: TickReport) -> None:
+                 report: TickReport, ctx: MarketContext | None = None) -> None:
         acc = self.guard.ledger.account(bot["bot_id"], mode)
         if acc is None:
             return
@@ -241,7 +248,7 @@ class Trader:
         acc = self.guard.ledger.by_id(acc["account_id"])
         if last_ts <= acc["last_candle_ts"]:
             return
-        entry, exit_ = compute_signals(s, g)
+        entry, exit_ = compute_signals(s, g, ctx)
         self.guard.ledger.set_last_candle(acc["account_id"], last_ts)
         if acc["qty"] > 0 and exit_[-1]:
             self.guard.exit_long(bot["bot_id"], mode, "signal")

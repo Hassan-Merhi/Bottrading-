@@ -15,6 +15,8 @@ from pathlib import Path
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from bots.analyst.digest import latest_digest
+from bots.data.mood import latest_fear_greed
 from bots.db import connect
 from bots.paper.trader import decide_graduation
 from bots.report.daily import account_rows, summary
@@ -63,6 +65,7 @@ background:var(--surface);color:var(--ink);width:120px}
 .legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;
 margin-right:6px}
 @media (max-width:700px){table.wide{min-width:680px}.chart,.legend{min-width:560px}.banner{font-size:22px}}
+.digest{white-space:pre-wrap;line-height:1.5}
 .tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);
 border-radius:6px;padding:6px 8px;font-size:13px;display:none;white-space:nowrap}
 """
@@ -335,6 +338,20 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
                                  (run["run_id"],)).fetchall()
         parts.append('<section><h2>Recent failure summaries</h2><ul>' + "".join(
             f"<li>{escape(r['failure_summary'])}</li>" for r in summaries) + '</ul></section>')
+
+    digest = latest_digest(conn)
+    fg = latest_fear_greed(conn)
+    mood = (f'<p>Fear &amp; Greed Index: <b>{fg[1]}</b>/100 '
+            f'<span class="muted">({_dt.datetime.fromtimestamp(fg[0] / 1000, _dt.timezone.utc):%Y-%m-%d})'
+            '</span></p>') if fg else '<p class="muted">No Fear &amp; Greed data yet.</p>'
+    when = (f'<p class="muted">Written {_dt.datetime.fromtimestamp(digest["ts"] / 1000, _dt.timezone.utc):%Y-%m-%d %H:%M} UTC'
+            f'{" by Claude" if digest["used_ai"] else " (plain digest, no AI)"}.</p>') if digest else ""
+    parts.append('<section><h2>Market mood and AI analyst</h2>' + mood
+                 + '<p class="muted">The analyst reads news and the public channels you list and '
+                 'writes you a briefing. It is information only: the trading bots never read it '
+                 'and it cannot place or change a trade.</p>'
+                 + (when + f'<div class="digest">{escape(digest["text"])}</div>' if digest
+                    else '<p class="muted">No briefing yet.</p>') + '</section>')
 
     events = conn.execute("SELECT * FROM risk_events ORDER BY ts DESC LIMIT 20").fetchall()
     ev_rows = "".join(

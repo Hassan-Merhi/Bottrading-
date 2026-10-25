@@ -8,6 +8,7 @@ import numpy as np
 from bots.backtest.engine import CostModel, run_backtest
 from bots.data.loader import Series
 from bots.evolution.diagnosis import market_regime
+from bots.strategy.context import MarketContext
 from bots.strategy.genome import Genome
 from bots.strategy.signals import SignalCache
 
@@ -75,11 +76,11 @@ class Evaluator:
     """Runs backtests for genomes over a fixed list of time windows (ms)."""
 
     def __init__(self, market: dict[tuple[str, str], Series], windows_ms: list[tuple[int, int]],
-                 cfg: dict):
+                 cfg: dict, ctx: MarketContext | None = None):
         self.market = market
         self.windows_ms = windows_ms
         self.cfg = cfg
-        self.cache = SignalCache(market)
+        self.cache = SignalCache(market, ctx)
 
     def evaluate(self, g: Genome) -> Evaluation:
         s, entries, exits = self.cache.get(g)

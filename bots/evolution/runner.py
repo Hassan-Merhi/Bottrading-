@@ -27,14 +27,16 @@ from bots.data.loader import Series, Splits, make_splits
 from bots.evolution.diagnosis import diagnose
 from bots.evolution.fitness import Evaluation, Evaluator, score_windows
 from bots.evolution.graveyard import Graveyard, failure_summary
+from bots.data.mood import load_fear_greed
+from bots.strategy.context import MarketContext, build_context
 from bots.strategy.genome import Genome, crossover, mutate, random_genome
 
 _worker_evaluator: Evaluator | None = None
 
 
-def _init_worker(market, windows_ms, cfg) -> None:
+def _init_worker(market, windows_ms, cfg, ctx) -> None:
     global _worker_evaluator
-    _worker_evaluator = Evaluator(market, windows_ms, cfg)
+    _worker_evaluator = Evaluator(market, windows_ms, cfg, ctx)
 
 
 def _evaluate_in_worker(g: Genome) -> Evaluation:
@@ -77,11 +79,13 @@ class RunResult:
 class EvolutionRun:
     def __init__(self, conn: sqlite3.Connection, cfg: dict,
                  market: dict[tuple[str, str], Series], data_label: str,
-                 log: Callable[[str], None] = print):
+                 log: Callable[[str], None] = print, ctx: MarketContext | None = None):
         self.conn = conn
         self.cfg = cfg
         self.ecfg = cfg["evolution"]
         self.market = market
+        # Daily trend data and Fear & Greed history for the filter genes.
+        self.ctx = ctx or build_context(market, load_fear_greed(conn))
         self.data_label = data_label
         self.log = log
         self.rng = random.Random(self.ecfg.get("seed"))
@@ -168,11 +172,12 @@ class EvolutionRun:
         self.conn.commit()
         size = self.ecfg["population_size"]
         workers = self.ecfg.get("workers") or os.cpu_count() or 1
-        self._serial_evaluator = Evaluator(self.market, self.windows_ms, self.cfg)
+        self._serial_evaluator = Evaluator(self.market, self.windows_ms, self.cfg, self.ctx)
         pool = None
         if workers > 1:
             pool = ProcessPoolExecutor(workers, initializer=_init_worker,
-                                       initargs=(self.market, self.windows_ms, self.cfg))
+                                       initargs=(self.market, self.windows_ms, self.cfg,
+                                                 self.ctx))
         try:
             population: list[Genome] = []
             self._fill(population, size, self._newcomer)
