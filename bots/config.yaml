@@ -1,0 +1,87 @@
+# Evolving crypto trading bots — all limits and settings.
+# Secrets (KRAKEN_API_KEY, KRAKEN_API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
+# come from environment variables only. Never put them in this file.
+
+database_path: bots/data/bots.db
+
+# ---------------------------------------------------------------------------
+# Market data
+# ---------------------------------------------------------------------------
+data:
+  exchange: kraken
+  pairs: [BTC/USD, ETH/USD, SOL/USD]      # liquid pairs whitelist
+  timeframes: [15m, 1h, 4h]
+  base_timeframe: 15m                    # stored; 1h and 4h are resampled from it
+  history_years: 3                       # how far back to backfill (2–4)
+
+# ---------------------------------------------------------------------------
+# Backtest realism
+# ---------------------------------------------------------------------------
+backtest:
+  # Kraken Pro spot taker fee for the lowest volume tier. VERIFY against
+  # https://www.kraken.com/features/fee-schedule before relying on results.
+  taker_fee_pct: 0.40
+  slippage_pct: 0.05                     # per fill
+  starting_balance_usd: 20               # matches max_per_bot_usd so sims face real minimums
+  # Kraken minimum order sizes. VERIFY: paper/live load these from the exchange.
+  min_order:
+    BTC/USD: {min_qty: 0.0001, min_cost_usd: 5}
+    ETH/USD: {min_qty: 0.002, min_cost_usd: 5}
+    SOL/USD: {min_qty: 0.02, min_cost_usd: 5}
+
+# ---------------------------------------------------------------------------
+# Evolution
+# ---------------------------------------------------------------------------
+evolution:
+  population_size: 200
+  generations: 100
+  split: {train: 0.6, validation: 0.2, test: 0.2}
+  walk_forward_windows: 4                # train split cut into this many consecutive windows
+  elite_fraction: 0.15                   # top 10–20% survive and breed
+  death_fraction: 0.5                    # bottom 50% die each generation
+  newcomer_fraction: 0.10                # random newcomers each generation
+  mutation_rate: 0.3                     # per-gene probability of mutating
+  mutation_scale: 0.10                   # ±10% on numeric genes
+  bot_max_drawdown_pct: 25               # death: drawdown beyond this
+  death_min_trades: 20                   # death: below starting balance after this many trades
+  finalists: 5                           # candidates that get the one-time test-set check
+  workers: 0                             # 0 = use all CPU cores
+  seed: null
+
+fitness:
+  metric: sharpe                         # sharpe | calmar
+  max_drawdown_pct: 15                   # penalty above this
+  drawdown_penalty: 5.0                  # per unit of drawdown above the limit
+  min_trades: 20                         # penalty below this
+  trades_penalty: 1.0                    # scaled by the shortfall fraction
+  hold_penalty: 0.5                      # scaled by fraction of windows that failed to beat holding
+  consistency_weight: 0.5                # fitness = mean(window scores) - w * std(window scores)
+
+graveyard:
+  similarity_radius: 0.08                # genome distance (0–1) counted as "too similar"
+  saturation: 5                          # this many similar deaths of one cause = full penalty
+  penalty: 0.5                           # max fitness penalty
+
+# ---------------------------------------------------------------------------
+# Pipeline gates (section 5)
+# ---------------------------------------------------------------------------
+graduation:
+  min_paper_days: 30
+  max_paper_drawdown_pct: 10
+  min_paper_trades: 20
+  must_beat_hold: true
+  owner_approval_required: true
+
+# ---------------------------------------------------------------------------
+# RISK RULES (section 6). Non-negotiable. Ask the owner before changing.
+# ---------------------------------------------------------------------------
+mode: PAPER                              # LIVE also needs MODE=LIVE env + LIVE_CONFIRMED.txt
+live_enabled: false
+risk:
+  max_total_capital_usd: 0               # 0 = paper only. Hard ceiling in code: 100
+  max_per_bot_usd: 20
+  max_live_bots: 3
+  daily_loss_limit_usd: 3
+  total_drawdown_kill_usd: 10
+  house_money_multiple: 2                # at 2x allocation, original stake becomes protected
+  heartbeat_hours: 2
