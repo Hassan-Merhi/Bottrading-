@@ -8,6 +8,7 @@ from bots.data.loader import Series
 # Efficiency ratio below this = price wandered without going anywhere.
 SIDEWAYS_EFFICIENCY = 0.15
 TREND_MOVE = 0.05
+BIG_MOVE = 0.20
 
 
 def market_regime(s: Series, start: int, end: int) -> tuple[str, float]:
@@ -15,13 +16,19 @@ def market_regime(s: Series, start: int, end: int) -> tuple[str, float]:
     c = s.close[start:end]
     if len(c) < 3:
         return "unknown", 0.0
-    move = c[-1] / c[0] - 1
-    path = np.abs(np.diff(c)).sum()
-    efficiency = abs(c[-1] - c[0]) / path if path > 0 else 0.0
+    step = max(int(s.ts[1] - s.ts[0]), 1)
     rets = np.diff(np.log(c))
-    bars_per_year = 365.25 * 86_400_000 / max(int(s.ts[1] - s.ts[0]), 1)
-    vol = float(rets.std() * np.sqrt(bars_per_year))
-    if efficiency < SIDEWAYS_EFFICIENCY or abs(move) < TREND_MOVE:
+    vol = float(rets.std() * np.sqrt(365.25 * 86_400_000 / step))
+    # Judge the trend on daily closes: over thousands of intraday candles the
+    # path length swamps any move and everything would look sideways.
+    daily = c[:: max(1, 86_400_000 // step)]
+    if len(daily) < 3:
+        daily = c
+    move = daily[-1] / daily[0] - 1
+    path = np.abs(np.diff(daily)).sum()
+    efficiency = abs(daily[-1] - daily[0]) / path if path > 0 else 0.0
+    big_move = abs(move) >= BIG_MOVE  # a large net move is a trend however choppy the path
+    if abs(move) < TREND_MOVE or (efficiency < SIDEWAYS_EFFICIENCY and not big_move):
         regime = "sideways"
     else:
         regime = "uptrend" if move > 0 else "downtrend"
