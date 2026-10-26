@@ -23,8 +23,9 @@ python -m pytest            # 133 tests, including the section 6.8 risk proofs
 
 ```bash
 # 1. History. Kraken's OHLC endpoint only serves the latest 720 candles, so:
-python -m bots.main fetch          # rebuild 15m candles from Kraken's public trades
-                                   # (hours per pair, resumable), or
+python -m bots.main fetch          # 3 years of 15m candles + Fear & Greed, ~2 minutes
+                                   # (data.history_source: Coinbase USD candles by default,
+                                   # or kraken_trades: Kraken's own trades, hours per pair), or
 python -m bots.main import-csv XBTUSD_15.csv --pair BTC/USD --timeframe 15m
 python -m bots.main status
 
