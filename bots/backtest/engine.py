@@ -3,7 +3,10 @@
 Rules that keep it honest:
 
 * No look-ahead. A signal at candle i (computed at its close) fills at the
-  open of candle i + 1.
+  open of candle i + 1. With limit entries (CostModel.entry_order), the buy
+  rests at that open and counts as filled only if the candle later trades
+  below it (low < open); it then pays the maker fee and no slippage. A candle
+  that never dips misses the entry, as a resting bid would.
 * Every trade has a stop-loss and a take-profit. The stop is a fixed percent
   or, for ATR-mode genomes, a per-candle distance decided at the signal candle
   (`stop_pct`). Both are checked inside
@@ -30,18 +33,28 @@ YEAR_MS = 365.25 * 86_400_000
 
 @dataclass(frozen=True)
 class CostModel:
-    fee: float              # fraction, e.g. 0.004
-    slippage: float         # fraction per fill
+    fee: float              # taker fraction, e.g. 0.008
+    slippage: float         # fraction per market fill
     starting_balance: float
     min_qty: float
     min_cost: float
+    maker_fee: float | None = None   # fraction for a resting limit entry; None = same as fee
+    entry_order: str = "market"      # market | limit
+
+    @property
+    def entry_fee(self) -> float:
+        return self.maker_fee if (self.entry_order == "limit" and self.maker_fee is not None) \
+            else self.fee
 
     @classmethod
-    def from_config(cls, bt_cfg: dict, pair: str) -> "CostModel":
+    def from_config(cls, bt_cfg: dict, pair: str, execution: dict | None = None) -> "CostModel":
         mins = bt_cfg["min_order"][pair]
+        execution = execution or {}
         return cls(fee=bt_cfg["taker_fee_pct"] / 100, slippage=bt_cfg["slippage_pct"] / 100,
                    starting_balance=float(bt_cfg["starting_balance_usd"]),
-                   min_qty=float(mins["min_qty"]), min_cost=float(mins["min_cost_usd"]))
+                   min_qty=float(mins["min_qty"]), min_cost=float(mins["min_cost_usd"]),
+                   maker_fee=bt_cfg.get("maker_fee_pct", bt_cfg["taker_fee_pct"]) / 100,
+                   entry_order=execution.get("entry_order", "market"))
 
 
 @dataclass
@@ -116,14 +129,21 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
             ptr += 1
             continue
 
-        fill = o[j] * (1 + cost.slippage)
-        notional = min(cash * size, cash / (1 + cost.fee))
+        if cost.entry_order == "limit":
+            if not l[j] < o[j]:  # the bid resting at the open was never hit
+                ptr += 1
+                continue
+            fill = o[j]
+        else:
+            fill = o[j] * (1 + cost.slippage)
+        fee_rate = cost.entry_fee
+        notional = min(cash * size, cash / (1 + fee_rate))
         qty = notional / fill
         if notional < cost.min_cost or qty < cost.min_qty:
             rejected += 1
             ptr += 1
             continue
-        fee_in = notional * cost.fee
+        fee_in = notional * fee_rate
         equity[filled_to - start:j - start] = cash
         cash_before = cash
         cash -= notional + fee_in

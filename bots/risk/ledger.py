@@ -103,6 +103,21 @@ class Ledger:
         self._house_money(acc["account_id"])
         return pnl
 
+    def set_pending(self, account_id: int, order_id: str, price: float, qty: float, ts: int,
+                    stop_pct: float, target_pct: float, reason: str) -> None:
+        self.conn.execute(
+            "UPDATE accounts SET pending_order_id=?, pending_price=?, pending_qty=?, pending_ts=?, "
+            "pending_stop_pct=?, pending_target_pct=?, pending_reason=? WHERE account_id=?",
+            (order_id, price, qty, ts, stop_pct, target_pct, reason, account_id))
+        self.conn.commit()
+
+    def clear_pending(self, account_id: int) -> None:
+        self.conn.execute(
+            "UPDATE accounts SET pending_order_id=NULL, pending_price=NULL, pending_qty=NULL, "
+            "pending_ts=NULL, pending_stop_pct=NULL, pending_target_pct=NULL, pending_reason=NULL "
+            "WHERE account_id=?", (account_id,))
+        self.conn.commit()
+
     def note_high(self, account_id: int, price: float) -> float:
         """Remember the highest price seen while in a trade; returns the new high."""
         acc = self.by_id(account_id)

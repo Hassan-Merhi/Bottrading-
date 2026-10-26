@@ -114,6 +114,13 @@ CREATE TABLE IF NOT EXISTS accounts (     -- one per bot per mode; live accounts
     fees REAL NOT NULL DEFAULT 0,
     hold_start_price REAL,
     high_since_entry REAL,            -- highest price seen while in a trade (trailing stop)
+    pending_order_id TEXT,            -- a resting limit entry, until it fills or is cancelled
+    pending_price REAL,
+    pending_qty REAL,
+    pending_ts INTEGER,
+    pending_stop_pct REAL,
+    pending_target_pct REAL,
+    pending_reason TEXT,
     last_candle_ts INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,      -- ms
     closed_at INTEGER
@@ -187,6 +194,13 @@ def connect(path: str | Path) -> sqlite3.Connection:
 # Columns added after the first release: (table, column, SQL type and default).
 MIGRATIONS = [
     ("accounts", "high_since_entry", "REAL"),
+    ("accounts", "pending_order_id", "TEXT"),
+    ("accounts", "pending_price", "REAL"),
+    ("accounts", "pending_qty", "REAL"),
+    ("accounts", "pending_ts", "INTEGER"),
+    ("accounts", "pending_stop_pct", "REAL"),
+    ("accounts", "pending_target_pct", "REAL"),
+    ("accounts", "pending_reason", "TEXT"),
 ]
 
 

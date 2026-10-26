@@ -85,7 +85,7 @@ class Evaluator:
     def evaluate(self, g: Genome) -> Evaluation:
         s, entries, exits = self.cache.get(g)
         stops = self.cache.stops(g)
-        cost = CostModel.from_config(self.cfg["backtest"], g.pair)
+        cost = CostModel.from_config(self.cfg["backtest"], g.pair, self.cfg.get("execution"))
         windows = []
         bounds = []
         for start_ms, end_ms in self.windows_ms:

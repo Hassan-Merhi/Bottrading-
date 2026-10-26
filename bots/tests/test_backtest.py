@@ -207,3 +207,22 @@ def test_time_exit_fills_at_the_open_after_max_hold_candles():
     assert run(make_series(o, h, l, c), [3], [], g).trades[0].reason == "stop"
     # Off by default.
     assert "exit after" not in base_genome().describe() and "exit after 3" in g.describe()
+
+
+def test_limit_entry_fills_only_when_the_candle_dips_below_the_open():
+    import dataclasses
+    o, h, l, c = flat(10)
+    o[3], h[3], l[3], c[3] = 101.0, 101.0, 101.0, 101.0  # the fill candle never dips below its open
+    s = make_series(o, h, l, c)
+    g = base_genome(position_size_pct=50, stop_loss_pct=5, take_profit_pct=15)
+    limit = dataclasses.replace(COST, maker_fee=0.002, entry_order="limit")
+    assert run(s, [2], [5], g, cost=limit).trades == []  # low == open: the bid never filled
+    l[3] = 100.5  # the candle traded below its open: the resting bid fills at the open
+    s = make_series(o, h, l, c)
+    r = run(s, [2], [5], g, cost=limit)
+    t = r.trades[0]
+    assert t.entry_price == pytest.approx(101.0)  # no slippage on a resting order
+    notional = 500.0
+    assert t.fees == pytest.approx(notional * 0.002 + (notional / 101.0) * t.exit_price * FEE)
+    assert run(s, [2], [5], g).trades[0].entry_price == pytest.approx(101.0 * (1 + SLIP))
+    assert limit.entry_fee == 0.002 and COST.entry_fee == FEE
