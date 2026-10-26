@@ -150,3 +150,33 @@ def test_env_overrides_for_deployment(monkeypatch, tmp_path):
     cfg = load_config()
     assert cfg["evolution"]["workers"] == 1
     assert cfg["database_path"] == str(tmp_path / "bots.db")
+
+
+def test_needs_backfill_only_for_missing_pairs(conn, cfg):
+    from bots.data.fetch import BACKFILL_DONE, needs_backfill, pair_needs_history
+    from bots.data.store import set_meta
+    cfg["data"]["pairs"] = ["BTC/USD", "XRP/USD"]
+    assert needs_backfill(conn, cfg)  # never finished
+    set_meta(conn, BACKFILL_DONE, "1")
+    assert needs_backfill(conn, cfg)  # XRP has no candles at all
+    for pair in ("BTC/USD", "XRP/USD"):
+        conn.execute("INSERT INTO candles VALUES (?, '15m', 1000000, 1, 1, 1, 1, 1)", (pair,))
+    assert not needs_backfill(conn, cfg)
+    month = 30 * 86_400_000
+    assert pair_needs_history(conn, "BTC/USD", "15m", since_ms=1_000_000 - month)  # a month short
+    assert not pair_needs_history(conn, "BTC/USD", "15m", since_ms=999_000)
+    assert pair_needs_history(conn, "ADA/USD", "15m", since_ms=999_000)
+
+
+def test_connect_migrates_an_older_accounts_table(tmp_path):
+    import sqlite3
+    from bots.db import SCHEMA, connect
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(SCHEMA.replace("    high_since_entry REAL,            "
+                                     "-- highest price seen while in a trade (trailing stop)\n", ""))
+    assert "high_since_entry" not in {r[1] for r in old.execute("PRAGMA table_info(accounts)")}
+    old.close()
+    conn = connect(path)
+    assert "high_since_entry" in {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
+    conn.close()

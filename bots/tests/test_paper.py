@@ -232,3 +232,34 @@ def test_paper_stops_restored_after_restart(setup):
     acc = guard.ledger.account("b1", "paper")
     assert acc["qty"] > 0 and acc["stop_order_id"] != old_stop
     assert new_paper.orders[acc["stop_order_id"]]["stopLossPrice"] == pytest.approx(acc["stop_price"])
+
+
+def test_trailing_stop_and_time_exit_sell_through_the_guard(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper", take_profit_pct=20.0, trail_pct=2.0)
+    signals["entry"] = True
+    trader.tick()
+    signals["entry"] = False
+    md.price = 55_000  # +10%: the trailing level rises to 53,900
+    trader.tick()
+    acc = guard.ledger.account("b1", "paper")
+    assert acc["high_since_entry"] == pytest.approx(55_000) and acc["qty"] > 0
+    md.price = 53_500  # under the trailing level, above the hard 2% stop
+    trader.tick()
+    fill = conn.execute("SELECT reason, pnl FROM fills WHERE side='sell'").fetchone()
+    assert fill[0] == "trail" and fill[1] > 0
+    assert guard.ledger.account("b1", "paper")["high_since_entry"] is None
+
+    add_bot(conn, "b2", "paper", take_profit_pct=20.0, max_hold_candles=2)  # 1h candles
+    md.price = 50_000
+    clock.t += H
+    signals["entry"] = True
+    trader.tick()
+    signals["entry"] = False
+    clock.t += H
+    trader.tick()
+    assert guard.ledger.account("b2", "paper")["qty"] > 0  # one hour: still holding
+    clock.t += H
+    trader.tick()
+    reasons = [r[0] for r in conn.execute("SELECT reason FROM fills WHERE bot_id='b2' AND side='sell'")]
+    assert reasons == ["time"]

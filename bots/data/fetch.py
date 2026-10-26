@@ -175,6 +175,23 @@ def backfill_from_candles(conn: sqlite3.Connection, exchange, pair: str, timefra
     return written
 
 
+def pair_needs_history(conn: sqlite3.Connection, pair: str, timeframe: str, since_ms: int,
+                       slack_ms: int = 7 * 86_400_000) -> bool:
+    """True unless the pair's stored history already reaches back to about since_ms."""
+    row = conn.execute("SELECT MIN(ts) FROM candles WHERE pair=? AND timeframe=?",
+                       (pair, timeframe)).fetchone()
+    return row is None or row[0] is None or int(row[0]) > since_ms + slack_ms
+
+
+def needs_backfill(conn: sqlite3.Connection, cfg: dict) -> bool:
+    """A full backfill never finished, or a newly whitelisted pair has no history yet."""
+    if get_meta(conn, BACKFILL_DONE) is None:
+        return True
+    tf = cfg["data"]["base_timeframe"]
+    return any(conn.execute("SELECT 1 FROM candles WHERE pair=? AND timeframe=? LIMIT 1",
+                            (pair, tf)).fetchone() is None for pair in cfg["data"]["pairs"])
+
+
 def backfill_all(conn: sqlite3.Connection, cfg: dict, log: Callable[[str], None] = print) -> None:
     """Backfill every whitelisted pair at the base timeframe, then top up recent candles.
 
@@ -191,6 +208,10 @@ def backfill_all(conn: sqlite3.Connection, cfg: dict, log: Callable[[str], None]
     since_ms = int((time.time() - years * 365.25 * 86400) * 1000)
     history = exchange if source == "kraken_trades" else make_exchange(source)
     for pair in cfg["data"]["pairs"]:
+        if not pair_needs_history(conn, pair, tf, since_ms):
+            n = update_recent(conn, exchange, pair, tf)
+            log(f"{pair} {tf}: history already stored, {n} recent Kraken candles topped up")
+            continue
         log(f"Backfilling {pair} {tf} from {source} since {pd.to_datetime(since_ms, unit='ms')}")
 
         def progress(pages: int, ts: int, pair=pair) -> None:

@@ -49,7 +49,7 @@ def test_repair_clips_and_orders_periods():
     assert g.slow_period >= g.fast_period + 5
     assert g.stop_loss_pct == 5.0 and g.position_size_pct == 10.0
     with pytest.raises(ValueError):
-        base_genome(pair="DOGE/USD")
+        base_genome(pair="SHIB/USD")
 
 
 def test_mutation_is_small():

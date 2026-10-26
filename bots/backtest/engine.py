@@ -53,7 +53,7 @@ class Trade:
     qty: float
     fees: float
     pnl: float              # after fees and slippage
-    reason: str             # stop | target | signal | end
+    reason: str             # stop | trail | target | time | signal | end
 
 
 @dataclass
@@ -96,6 +96,8 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
     cash = cost.starting_balance
     size = g.position_size_pct / 100
     sl, tp = g.stop_loss_pct / 100, g.take_profit_pct / 100
+    trail = g.trail_pct / 100
+    hold_max = g.max_hold_candles  # 0 = no time exit
     per_day: dict[int, int] = {}
     filled_to = start          # equity is written for candles before this index
     earliest_fill = start + 1  # next candle an entry may fill on
@@ -130,15 +132,33 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
 
         e = int(np.searchsorted(exits, j))
         sig = int(exits[e]) if e < len(exits) else None
+        k_time = j + hold_max if hold_max else None  # time exit fills at this candle's open
         scan_end = min(sig + 1, end) if sig is not None else end
-        k_sl = _first_true(l[j:scan_end] <= stop)
-        k_tp = _first_true(h[j:scan_end] >= target)
+        if k_time is not None:
+            scan_end = min(scan_end, k_time)
+        lows, highs = l[j:scan_end], h[j:scan_end]
+        if trail > 0 and len(highs) > 1:
+            # The trailing level at candle k uses highs up to k - 1: inside a candle the
+            # order of high and low is unknown, so the stop may not chase the same candle.
+            hh = np.maximum.accumulate(highs)
+            level = np.empty_like(lows)
+            level[0] = stop
+            level[1:] = np.maximum(stop, hh[:-1] * (1 - trail))
+        else:
+            level = None
+        k_sl = _first_true(lows <= (level if level is not None else stop))
+        k_tp = _first_true(highs >= target)
         if k_sl >= 0 and (k_tp < 0 or k_sl <= k_tp):
             k = j + k_sl
-            px, reason = (min(stop, o[k]) if k > j else stop), "stop"
+            lvl = float(level[k_sl]) if level is not None else stop
+            px = min(lvl, o[k]) if k > j else lvl
+            reason = "trail" if lvl > stop else "stop"
         elif k_tp >= 0:
             k = j + k_tp
             px, reason = target, "target"
+        elif k_time is not None and k_time < end and (sig is None or k_time <= sig + 1):
+            k = k_time
+            px, reason = o[k], "time"
         elif sig is not None and sig + 1 < end:
             k = sig + 1
             px, reason = o[k], "signal"
@@ -195,6 +215,8 @@ def _finish(r: Result, s: Series, cost: CostModel) -> Result:
         "n_trades": len(t),
         "win_rate": wins / len(t) if t else 0.0,
         "stop_outs": sum(tr.reason == "stop" for tr in t),
+        "trail_outs": sum(tr.reason == "trail" for tr in t),
+        "time_outs": sum(tr.reason == "time" for tr in t),
         "targets": sum(tr.reason == "target" for tr in t),
         "fees_paid": float(sum(tr.fees for tr in t)),
         "gross_pnl": float(sum(tr.pnl + tr.fees for tr in t)),
