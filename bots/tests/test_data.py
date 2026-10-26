@@ -140,3 +140,13 @@ def test_backfill_from_candles_pages_through_history(conn):
 def test_proxy_options():
     assert fetch.proxy_options({"HTTPS_PROXY": "http://p:1"}) == {"httpsProxy": "http://p:1"}
     assert fetch.proxy_options({}) == {}
+
+
+def test_env_overrides_for_deployment(monkeypatch, tmp_path):
+    from bots.config import load_config
+
+    monkeypatch.setenv("EVOLUTION_WORKERS", "1")
+    monkeypatch.setenv("BOTS_STATE_DIR", str(tmp_path))
+    cfg = load_config()
+    assert cfg["evolution"]["workers"] == 1
+    assert cfg["database_path"] == str(tmp_path / "bots.db")
