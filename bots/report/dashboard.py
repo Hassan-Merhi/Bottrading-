@@ -1,4 +1,8 @@
-"""FastAPI dashboard: mode banner, limits, leaderboard, progress, graveyard, results.
+"""FastAPI dashboard: a control panel for the owner.
+
+Overview: mode, system health, the pipeline (evolution -> paper -> approval -> live),
+results, every bot with its progress toward graduation, evolution progress, the
+market briefing and the risk log. Works on a phone: tables stack into cards.
 
 Read-only, except the owner's approve/decline buttons. Those need the
 DASHBOARD_TOKEN env value; without it set, approvals work only from Telegram.
@@ -16,66 +20,171 @@ from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from bots.analyst.digest import latest_digest
+from bots.data.fetch import BACKFILL_DONE
 from bots.data.mood import latest_fear_greed
+from bots.data.store import get_meta
 from bots.db import connect
 from bots.paper.trader import decide_graduation
 from bots.report.daily import account_rows, summary
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
+from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
                              RiskState, now_ms)
 from bots.strategy.genome import Genome
 
 CSS = """
-:root{--surface:#fcfcfb;--panel:#ffffff;--ink:#0b0b0b;--ink-2:#52514e;--ink-3:#8a8984;
---line:#e4e3df;--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;
---paper:#2a78d6;--live:#e34948;--good:#008300;--bad:#c62828;color-scheme:light}
+:root{--surface:#f4f5f7;--panel:#ffffff;--panel-2:#f8f9fb;--ink:#101418;--ink-2:#4b5563;
+--ink-3:#8a919c;--line:#e3e6ea;--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;
+--paper:#2563eb;--paper-soft:#e8f0fe;--live:#dc2626;--live-soft:#fde8e8;--good:#15803d;
+--good-soft:#e6f4ea;--bad:#c62828;--bad-soft:#fdecea;--warn:#b45309;--warn-soft:#fff4e0;
+--accent:#2563eb;--shadow:0 1px 2px rgba(16,20,24,.06),0 4px 14px rgba(16,20,24,.05);
+color-scheme:light}
 @media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){
---surface:#1a1a19;--panel:#222221;--ink:#f0efec;--ink-2:#c3c2b7;--ink-3:#8f8e86;
---line:#3a3a37;--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;
---paper:#3987e5;--live:#e66767;--good:#4caf50;--bad:#ef5350;color-scheme:dark}}
-:root[data-theme="dark"]{--surface:#1a1a19;--panel:#222221;--ink:#f0efec;--ink-2:#c3c2b7;
---ink-3:#8f8e86;--line:#3a3a37;--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;
---paper:#3987e5;--live:#e66767;--good:#4caf50;--bad:#ef5350;color-scheme:dark}
-*{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);
-font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
-main{max-width:1100px;margin:0 auto;padding:16px}
-nav a{color:var(--ink-2);margin-right:16px}
-.banner{border-radius:10px;padding:18px 20px;margin:12px 0;color:#fff;font-weight:700;
-font-size:28px;letter-spacing:.04em}
-.banner small{display:block;font-size:14px;font-weight:500;letter-spacing:0;opacity:.95}
-.banner.paper{background:var(--paper)}.banner.live{background:var(--live)}
-.warn{border:1px solid var(--line);border-left:4px solid var(--live);background:var(--panel);
-padding:10px 14px;border-radius:6px;margin:8px 0}
-section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-padding:14px 16px;margin:14px 0;overflow-x:auto}
-h2{font-size:17px;margin:0 0 10px}table{border-collapse:collapse;width:100%;font-size:14px}
-th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--ink-2);font-weight:600}td.n{text-align:right;font-variant-numeric:tabular-nums}
+--surface:#0f1216;--panel:#171b21;--panel-2:#1d222a;--ink:#eef0f3;--ink-2:#b4bac4;
+--ink-3:#7c838e;--line:#2a3039;--series-1:#4a8ee6;--series-2:#ef7a4b;--series-3:#2bbf88;
+--paper:#4a8ee6;--paper-soft:#182942;--live:#ef5350;--live-soft:#3a1d1d;--good:#4ade80;
+--good-soft:#14301f;--bad:#f87171;--bad-soft:#3a1d1d;--warn:#fbbf24;--warn-soft:#3a2c0f;
+--accent:#4a8ee6;--shadow:none;color-scheme:dark}}
+:root[data-theme="dark"]{--surface:#0f1216;--panel:#171b21;--panel-2:#1d222a;--ink:#eef0f3;
+--ink-2:#b4bac4;--ink-3:#7c838e;--line:#2a3039;--series-1:#4a8ee6;--series-2:#ef7a4b;
+--series-3:#2bbf88;--paper:#4a8ee6;--paper-soft:#182942;--live:#ef5350;--live-soft:#3a1d1d;
+--good:#4ade80;--good-soft:#14301f;--bad:#f87171;--bad-soft:#3a1d1d;--warn:#fbbf24;
+--warn-soft:#3a2c0f;--accent:#4a8ee6;--shadow:none;color-scheme:dark}
+*{box-sizing:border-box}html{scroll-padding-top:104px;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--surface);color:var(--ink);
+font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+.top{position:sticky;top:0;z-index:20;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar{max-width:1100px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px;
+flex-wrap:wrap}
+.brand{font-weight:700;font-size:17px;letter-spacing:.01em;display:flex;align-items:center;gap:8px}
+.brand i{width:10px;height:10px;border-radius:50%;background:var(--good);display:inline-block}
+.brand i.off{background:var(--bad)}
+.mode{font-weight:800;font-size:13px;letter-spacing:.08em;padding:4px 10px;border-radius:999px}
+.mode.paper{background:var(--paper-soft);color:var(--paper)}
+.mode.live{background:var(--live);color:#fff}
+.hb{color:var(--ink-3);font-size:13px;margin-left:auto}
+.tabs{max-width:1100px;margin:0 auto;padding:0 8px;display:flex;gap:2px;overflow-x:auto;
+scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{color:var(--ink-2);text-decoration:none;padding:8px 10px;font-size:14px;white-space:nowrap;
+border-bottom:2px solid transparent}
+.tabs a:hover,.tabs a.on{color:var(--ink);border-bottom-color:var(--accent)}
+main{max-width:1100px;margin:0 auto;padding:12px 16px 56px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+padding:16px;margin:14px 0;box-shadow:var(--shadow)}
+h2{font-size:16px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+h2 .count{background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+font-size:12px;padding:0 8px;color:var(--ink-2);font-weight:600}
+.help{color:var(--ink-3);font-size:13px;margin:0 0 12px}
+.hero{display:grid;grid-template-columns:1.2fr 1fr;gap:14px;margin:14px 0}
+.modecard{border-radius:14px;padding:18px 20px;color:#fff;box-shadow:var(--shadow)}
+.modecard.paper{background:linear-gradient(135deg,#2563eb,#1d4ed8)}
+.modecard.live{background:linear-gradient(135deg,#dc2626,#991b1b)}
+.modecard .big{font-size:30px;font-weight:800;letter-spacing:.03em;line-height:1.1}
+.modecard .sub{opacity:.95;font-size:14px;margin-top:6px}
+.modecard .why{opacity:.85;font-size:12.5px;margin-top:10px;line-height:1.4}
+.status{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px;
+box-shadow:var(--shadow)}
+.status h3{margin:0 0 8px;font-size:13px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-top:1px solid var(--line);
+font-size:14px}.kv:first-of-type{border-top:0}.kv span:last-child{text-align:right;color:var(--ink-2)}
+.ok{color:var(--good);font-weight:600}.no{color:var(--bad);font-weight:600}.soon{color:var(--warn);font-weight:600}
+.notice{border:1px solid var(--line);border-left:4px solid var(--warn);background:var(--warn-soft);
+color:var(--ink);padding:10px 14px;border-radius:10px;margin:10px 0;font-size:14px}
+.notice.danger{border-left-color:var(--live);background:var(--live-soft)}
+.pipe{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.step{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px;
+position:relative}
+.step b{display:block;font-size:26px;line-height:1;font-variant-numeric:tabular-nums;margin:4px 0 6px}
+.step .t{font-size:13px;font-weight:600}.step .d{font-size:12px;color:var(--ink-3);line-height:1.35}
+.step.hot{border-color:var(--warn);background:var(--warn-soft)}
+.step.live{border-color:var(--live)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.tile{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.tile b{display:block;font-size:22px;font-variant-numeric:tabular-nums;line-height:1.2;margin:2px 0}
+.tile .lbl{color:var(--ink-2);font-size:12.5px;display:block}
 .pos{color:var(--good)}.neg{color:var(--bad)}.muted{color:var(--ink-3)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
-.tile{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
-.tile b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
-.tile .lbl{color:var(--ink-2);font-size:13px;display:block}
-button{font:inherit;padding:4px 10px;border-radius:6px;border:1px solid var(--line);
-background:var(--surface);color:var(--ink);cursor:pointer}
-input{font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:6px;
-background:var(--surface);color:var(--ink);width:120px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.bot{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.bot .head{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.bot .id{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;white-space:nowrap}
+.bot .strategy{font-size:13px;color:var(--ink-2);line-height:1.4;margin-bottom:10px}
+.badge{font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:999px;margin-left:auto;
+white-space:nowrap;background:var(--panel);border:1px solid var(--line);color:var(--ink-2)}
+.badge.paper{background:var(--paper-soft);color:var(--paper);border-color:transparent}
+.badge.live{background:var(--live);color:#fff;border-color:transparent}
+.badge.ready{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.badge.open{background:var(--good-soft);color:var(--good);border-color:transparent}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px}
+.stats div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.stats b{display:block;font-size:15px;font-variant-numeric:tabular-nums}
+.stats span{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.gate{font-size:12.5px}.gate .row{display:flex;align-items:center;gap:8px;padding:3px 0}
+.gate .row span:first-child{flex:0 0 118px;color:var(--ink-2)}
+.gate .track{flex:1;height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+.gate .fill{height:100%;background:var(--accent);border-radius:4px}
+.gate .fill.done{background:var(--good)}.gate .fill.fail{background:var(--bad)}
+.gate .v{flex:0 0 auto;min-width:56px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.gate .title{font-weight:600;color:var(--ink-2);margin:4px 0 2px;font-size:12px;text-transform:uppercase;
+letter-spacing:.05em}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--ink-2);font-weight:600;font-size:13px}td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+form.approve{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
+background:var(--panel);color:var(--ink);cursor:pointer;font-weight:600}
+button.primary{background:var(--good);border-color:var(--good);color:#fff}
+button.danger{color:var(--bad)}
+input{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:8px;
+background:var(--panel);color:var(--ink);width:160px;max-width:100%}
 .chart{position:relative}.chart svg{width:100%;height:auto;display:block}
 .legend{display:flex;gap:16px;font-size:13px;color:var(--ink-2);margin-bottom:6px}
 .legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;
 margin-right:6px}
-@media (max-width:700px){table.wide{min-width:680px}.chart,.legend{min-width:560px}.banner{font-size:22px}}
-.digest{white-space:pre-wrap;line-height:1.5}
 .tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);
-border-radius:6px;padding:6px 8px;font-size:13px;display:none;white-space:nowrap}
+border-radius:6px;padding:6px 8px;font-size:13px;display:none;white-space:nowrap;box-shadow:var(--shadow)}
+.digest{white-space:pre-wrap;line-height:1.55;font-size:14px;background:var(--panel-2);
+border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.mood{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+.mood .dial{flex:1;height:10px;border-radius:5px;position:relative;
+background:linear-gradient(90deg,#dc2626,#f59e0b,#16a34a)}
+.mood .dial i{position:absolute;top:-4px;width:18px;height:18px;border-radius:50%;background:var(--panel);
+border:3px solid var(--ink);transform:translateX(-50%)}
+.how{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.how div{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+font-size:13px}.how b{display:block;margin-bottom:2px}
+.events li{padding:6px 0;border-bottom:1px solid var(--line);font-size:14px}
+.events li:last-child{border-bottom:0}.events time{color:var(--ink-3);font-size:12.5px;display:block}
+.events .kind{font-weight:600;margin-right:6px}
+ul{padding-left:18px;margin:6px 0}
+@media (max-width:760px){
+ .hero{grid-template-columns:1fr}.modecard .big{font-size:24px}
+ .pipe{grid-template-columns:repeat(2,1fr)}.pipe .step:last-child{grid-column:span 2}
+ .stats{grid-template-columns:repeat(2,1fr)}
+ .cards{grid-template-columns:1fr}
+ table.stack thead{display:none}
+ table.stack tr{display:block;border:1px solid var(--line);border-radius:10px;margin:8px 0;
+ padding:6px 10px;background:var(--panel-2)}
+ table.stack td{display:flex;justify-content:space-between;gap:12px;border:0;padding:4px 0;
+ text-align:right}
+ table.stack td::before{content:attr(data-label);color:var(--ink-3);font-size:12px;text-align:left;
+ flex:0 0 40%}
+ table.stack td.wide{display:block;text-align:left}
+ table.stack td.wide::before{display:block;margin-bottom:2px}
+ .gate .row span:first-child{flex-basis:96px}
+ section{padding:14px 12px;border-radius:12px}main{padding:8px 10px 56px}
+ .hb{display:none}
+}
 """
 
-CHART_JS = """
+JS = """
 document.querySelectorAll('.chart').forEach(function(c){
   var data=JSON.parse(c.dataset.points), svg=c.querySelector('svg'), tip=c.querySelector('.tip'),
       cross=svg.querySelector('.cross'), W=+svg.dataset.w, L=+svg.dataset.l, R=+svg.dataset.r;
-  svg.addEventListener('mousemove',function(e){
-    var b=svg.getBoundingClientRect(), x=(e.clientX-b.left)*W/b.width;
+  function show(clientX){
+    var b=svg.getBoundingClientRect(), x=(clientX-b.left)*W/b.width;
     var i=Math.round((x-L)/((W-L-R)/Math.max(data.length-1,1)));
     i=Math.max(0,Math.min(data.length-1,i)); var d=data[i];
     var px=L+i*(W-L-R)/Math.max(data.length-1,1);
@@ -85,11 +194,25 @@ document.querySelectorAll('.chart').forEach(function(c){
     tip.style.display='block';
     var left=(px/W)*b.width+12; if(left>b.width-140) left-=160;
     tip.style.left=left+'px'; tip.style.top='30px';
-  });
+  }
+  svg.addEventListener('mousemove',function(e){show(e.clientX);});
+  svg.addEventListener('touchmove',function(e){show(e.touches[0].clientX);},{passive:true});
   svg.addEventListener('mouseleave',function(){tip.style.display='none';cross.style.display='none';});
 });
+(function(){
+  var links=[].slice.call(document.querySelectorAll('.tabs a[href^="#"]'));
+  var secs=links.map(function(a){return document.querySelector(a.getAttribute('href'));});
+  function mark(){
+    var y=window.scrollY+120, on=0;
+    secs.forEach(function(s,i){if(s&&s.offsetTop<=y) on=i;});
+    links.forEach(function(a,i){a.classList.toggle('on',i===on);});
+  }
+  if(links.length){window.addEventListener('scroll',mark,{passive:true});mark();}
+})();
 """
 
+
+# -- small formatting helpers --------------------------------------------------
 
 def _money(x: float | None) -> str:
     if x is None:
@@ -103,6 +226,50 @@ def _pct(x: float | None) -> str:
         return "—"
     cls = "pos" if x > 0 else "neg" if x < 0 else ""
     return f'<span class="{cls}">{x * 100:+.1f}%</span>'
+
+
+def _utc(ms: int | float) -> _dt.datetime:
+    return _dt.datetime.fromtimestamp(ms / 1000, _dt.timezone.utc)
+
+
+def _ago(ms: int | None, now: int) -> str:
+    if not ms:
+        return "never"
+    m = (now - int(ms)) / 60000
+    if m < 1:
+        return "just now"
+    if m < 90:
+        return f"{m:.0f} min ago"
+    h = m / 60
+    if h < 36:
+        return f"{h:.0f} h ago"
+    return f"{h / 24:.0f} days ago"
+
+
+def _next_at(hour: int, now: int, ran_today: bool = False) -> str:
+    """'today 02:00 UTC (in 3 h)' or 'tomorrow 02:00 UTC'."""
+    n = _utc(now)
+    target = n.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if n >= target or ran_today:
+        target += _dt.timedelta(days=1)
+    hours = (target - n).total_seconds() / 3600
+    when = "today" if target.date() == n.date() else "tomorrow"
+    left = f"in {hours * 60:.0f} min" if hours < 1 else f"in {hours:.0f} h"
+    return f"{when} {hour:02d}:00 UTC ({left})"
+
+
+def _table(headers: list[tuple[str, str]], rows: list[list[str]]) -> str:
+    """A table that stacks into cards on narrow screens.
+
+    headers: (label, css class) pairs; the class is applied to both th and td.
+    """
+    head = "".join(f'<th class="{c}">{escape(h)}</th>' for h, c in headers)
+    body = []
+    for r in rows:
+        body.append("<tr>" + "".join(
+            f'<td class="{c}" data-label="{escape(h)}">{cell}</td>'
+            for (h, c), cell in zip(headers, r)) + "</tr>")
+    return f'<table class="stack"><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table>'
 
 
 def progress_chart(gens: list[dict]) -> str:
@@ -149,13 +316,26 @@ def progress_chart(gens: list[dict]) -> str:
             f'stroke-dasharray="3 3" style="display:none"/></svg><div class="tip"></div></div>')
 
 
-def page(title: str, body: str) -> str:
+OVERVIEW_TABS = [("#status", "Status"), ("#pipeline", "Pipeline"), ("#results", "Results"),
+                 ("#bots", "Bots"), ("#evolution", "Evolution"), ("#briefing", "Briefing"),
+                 ("#events", "Risk log"), ("#limits", "Limits")]
+
+
+def page(title: str, body: str, mode: str = "PAPER", heartbeat: str = "",
+         tabs: list[tuple[str, str]] | None = None, alive: bool = True) -> str:
+    tabs = OVERVIEW_TABS if tabs is None else tabs
+    nav = "".join(f'<a href="{href}">{escape(label)}</a>' for href, label in tabs)
+    nav += '<a href="/graveyard">Graveyard</a><a href="/api/status">JSON</a>'
+    mode_cls = "live" if mode == "LIVE" else "paper"
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{escape(title)}</title><style>{CSS}</style></head><body><main>'
-            f'<nav><a href="/">Overview</a><a href="/graveyard">Graveyard</a>'
-            f'<a href="/api/status">JSON</a></nav>{body}</main><script>{CHART_JS}</script>'
-            f'</body></html>')
+            f'<meta name="theme-color" content="#2563eb">'
+            f'<title>{escape(title)}</title><style>{CSS}</style></head><body>'
+            f'<header class="top"><div class="bar"><a href="/" class="brand" '
+            f'style="color:inherit;text-decoration:none"><i class="{"" if alive else "off"}"></i>'
+            f'Trading Bots</a><span class="mode {mode_cls}">{escape(mode)}</span>'
+            f'<span class="hb">{heartbeat}</span></div><nav class="tabs">{nav}</nav></header>'
+            f'<main>{body}</main><script>{JS}</script></body></html>')
 
 
 def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastAPI:
@@ -202,7 +382,13 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
     def overview():
         conn = db()
         try:
-            return page("Trading bots", _overview(conn, cfg, bool(env.get("DASHBOARD_TOKEN"))))
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
+            body = _overview(conn, cfg, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Trading bots", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}", alive=alive)
         finally:
             conn.close()
 
@@ -210,156 +396,366 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
     def graveyard():
         conn = db()
         try:
-            return page("Graveyard", _graveyard(conn))
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            return page("Graveyard", _graveyard(conn), summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}", tabs=[("/", "Overview")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000)
         finally:
             conn.close()
 
     return app
 
 
+# -- overview sections -----------------------------------------------------------
+
+def _latest_price(conn, pair: str, timeframe: str) -> float | None:
+    row = conn.execute("SELECT close FROM candles WHERE pair=? AND timeframe=? "
+                       "ORDER BY ts DESC LIMIT 1", (pair, timeframe)).fetchone()
+    return float(row[0]) if row else None
+
+
+def _gate_progress(a: dict, cfg: dict, price: float | None, now: int) -> str:
+    """The five graduation checks as progress bars."""
+    g = cfg["graduation"]
+    bt = cfg["backtest"]
+    days = (now - a["started_at"]) / DAY_MS
+    ret = a["pnl"] / a["allocation"]
+    hold = None
+    if a.get("hold_start_price") and price:
+        fee, slip = bt["taker_fee_pct"] / 100, bt["slippage_pct"] / 100
+        hold = price * (1 - slip) * (1 - fee) / (a["hold_start_price"] * (1 + slip) * (1 + fee)) - 1
+    dd_limit = g["max_paper_drawdown_pct"] / 100
+
+    def bar(label, frac, value, done, failed=False):
+        frac = max(0.0, min(1.0, frac))
+        cls = "done" if done else "fail" if failed else ""
+        return (f'<div class="row"><span>{label}</span><div class="track">'
+                f'<div class="fill {cls}" style="width:{frac * 100:.0f}%"></div></div>'
+                f'<span class="v">{value}</span></div>')
+
+    rows = [
+        bar("Days in paper", days / g["min_paper_days"], f'{days:.0f} / {g["min_paper_days"]}',
+            days >= g["min_paper_days"]),
+        bar("Trades", a["trades"] / g["min_paper_trades"], f'{a["trades"]} / {g["min_paper_trades"]}',
+            a["trades"] >= g["min_paper_trades"]),
+        bar("Profit after fees", 1 if ret > 0 else 0, f"{ret * 100:+.1f}%", ret > 0,
+            failed=ret <= 0 and a["trades"] > 0),
+        bar("Drawdown under " + f'{g["max_paper_drawdown_pct"]}%', a["max_drawdown"] / dd_limit,
+            f'{a["max_drawdown"] * 100:.1f}%', a["max_drawdown"] < dd_limit,
+            failed=a["max_drawdown"] >= dd_limit),
+    ]
+    if g.get("must_beat_hold"):
+        if hold is None:
+            rows.append(bar("Beats holding coin", 0, "n/a", False))
+        else:
+            rows.append(bar("Beats holding coin", 1 if ret > hold else 0,
+                            f"{(ret - hold) * 100:+.1f}%", ret > hold, failed=ret <= hold))
+    return '<div class="gate"><div class="title">Graduation progress</div>' + "".join(rows) + "</div>"
+
+
+def _bot_card(a: dict, cfg: dict, conn, now: int, mode: str, extra: str = "") -> str:
+    g = Genome.from_dict(json.loads(a["genome_json"]))
+    status = a["status"]
+    badge = {"paper": ("paper", "PAPER"), "live": ("live", "LIVE"),
+             "ready_to_graduate": ("ready", "READY FOR APPROVAL"),
+             "approved": ("ready", "APPROVED"), "retired": ("", "RETIRED")}.get(
+                 status, ("", status.upper()))
+    pos = "open" if a["qty"] else "flat"
+    pos_badge = f'<span class="badge open">position open</span>' if a["qty"] else ""
+    ret = a["pnl"] / a["allocation"] if a["allocation"] else 0
+    stats = (f'<div class="stats">'
+             f'<div><b>${a["last_equity"]:.2f}</b><span>equity</span></div>'
+             f'<div><b>{_pct(ret)}</b><span>return</span></div>'
+             f'<div><b>{a["max_drawdown"] * 100:.1f}%</b><span>max drawdown</span></div>'
+             f'<div><b>{a["trades"]}</b><span>trades</span></div></div>')
+    meta = (f'<div class="help" style="margin:0 0 8px">Started with ${a["allocation"]:.2f} · '
+            f'{escape(pos)} · running {(now - a["started_at"]) / DAY_MS:.0f} days'
+            + (f' · protected ${a["protected"]:.2f}' if a["protected"] else "") + '</div>')
+    gate = ""
+    if mode == "paper" and status == "paper":
+        gate = _gate_progress(a, cfg, _latest_price(conn, g.pair, cfg["data"]["base_timeframe"]), now)
+    return (f'<div class="bot"><div class="head"><span class="id">{escape(a["bot_id"])}</span>'
+            f'{pos_badge}<span class="badge {badge[0]}">{badge[1]}</span></div>'
+            f'<div class="strategy">{escape(g.describe())}</div>{stats}{meta}{gate}{extra}</div>')
+
+
 def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
-    s = summary(conn, now_ms())
+    now = now_ms()
+    s = summary(conn, now)
     st = RiskState(conn)
     mode = s["mode"]
     reasons = st.get("mode_reasons", "")
     risk = cfg["risk"]
-    if mode == "LIVE":
-        banner = ('<div class="banner live">LIVE — REAL MONEY<small>Live trading can lose money, '
-                  f'up to the caps below (daily ${risk["daily_loss_limit_usd"]}, total '
-                  f'${risk["total_drawdown_kill_usd"]}).</small></div>')
-    else:
-        banner = ('<div class="banner paper">PAPER — fake money, real prices<small>No real money '
-                  f'at risk. {escape(reasons)}</small></div>')
-    parts = [banner,
-             '<div class="warn">Live trading is never risk-free. If live mode is unlocked, real '
-             f'money can be lost up to the configured caps: ${risk["daily_loss_limit_usd"]} per '
-             f'day and ${risk["total_drawdown_kill_usd"]} in total before the kill switch, with '
-             f'at most ${risk["max_total_capital_usd"]} of capital (hard ceiling '
-             f'${HARD_CAPITAL_CEILING_USD:.0f}). Past results do not guarantee future profits.'
-             '</div>']
-    flags = [(KILL_SWITCH, "Kill switch"), (CRASH_LOCK, "Waiting for owner after restart"),
-             (ENTRY_HALT, "New trades halted"), (DAILY_HALT_UNTIL, "Daily loss pause until")]
-    for key, label in flags:
-        v = st.get(key)
-        if v and not (key == DAILY_HALT_UNTIL and int(v) < now_ms()):
-            parts.append(f'<div class="warn"><b>{label}:</b> {escape(v)}</div>')
+    w = cfg["worker"]
+    parts: list[str] = []
 
+    # -- 1. status: mode card + system health -------------------------------
+    if mode == "LIVE":
+        modecard = ('<div class="modecard live"><div class="big">LIVE — REAL MONEY</div>'
+                    f'<div class="sub">Live trading can lose money, up to the caps: '
+                    f'${risk["daily_loss_limit_usd"]} per day, ${risk["total_drawdown_kill_usd"]} '
+                    'in total.</div></div>')
+    else:
+        modecard = ('<div class="modecard paper"><div class="big">PAPER MODE</div>'
+                    '<div class="sub">Fake money, real prices. Nothing real is at risk.</div>'
+                    f'<div class="why">Why not live: {escape(reasons) or "live mode has not been unlocked."}'
+                    '</div></div>')
     hb = st.get(HEARTBEAT)
-    hb_txt = f"{(now_ms() - int(hb)) / 60000:.0f} min ago" if hb else "never"
+    hb_ok = bool(hb) and now - int(hb) < 3 * w["poll_seconds"] * 1000 + 120_000
+    tf = cfg["data"]["base_timeframe"]
+    data_rows = conn.execute("SELECT pair, COUNT(*) n, MAX(ts) last FROM candles WHERE timeframe=? "
+                             "GROUP BY pair", (tf,)).fetchall()
+    last_candle = max((r["last"] for r in data_rows), default=None)
+    backfill_done = get_meta(conn, BACKFILL_DONE) is not None
+    if not data_rows:
+        data_txt = '<span class="no">no history yet</span>'
+    elif not backfill_done:
+        data_txt = f'<span class="soon">downloading history</span> · {len(data_rows)} pairs'
+    else:
+        data_txt = (f'<span class="ok">ready</span> · {len(data_rows)} pairs, '
+                    f'last candle {_ago(last_candle, now)}')
+    today = _utc(now).strftime("%Y-%m-%d")
+    acfg = cfg.get("analyst") or {}
+    sched = [("Trading loop", f'<span class="{"ok" if hb_ok else "no"}">'
+                              f'{"running" if hb_ok else "not running"}</span> · {_ago(hb, now)}'),
+             ("Market data", data_txt),
+             ("Next evolution", _next_at(w["evolution_hour_utc"], now,
+                                         st.get("last_evolution") == today)),
+             ("Next daily report", _next_at(w["daily_report_hour_utc"], now,
+                                            st.get("last_report") == today))]
+    if acfg.get("enabled"):
+        sched.append(("Next briefing", _next_at(acfg["hour_utc"], now,
+                                                st.get("last_digest") == today)))
+    sched.append(("Next backup", _next_at(w["backup_hour_utc"], now,
+                                          st.get("last_backup") == today)))
+    status = ('<div class="status"><h3>System</h3>' + "".join(
+        f'<div class="kv"><span>{escape(k)}</span><span>{v}</span></div>' for k, v in sched)
+        + '</div>')
+    parts.append(f'<div id="status" class="hero">{modecard}{status}</div>')
+
+    # -- alerts ---------------------------------------------------------------
+    flags = [(KILL_SWITCH, "Kill switch is on", "All live trading is stopped until you run "
+              "confirm-live again."),
+             (CRASH_LOCK, "Waiting for you after a restart", "The worker restarted without a clean "
+              "shutdown. It stays in paper mode until you run `confirm-live`. Paper trading is not "
+              "affected."),
+             (ENTRY_HALT, "New trades are paused", "An API or data problem was detected. Exits still "
+              "work; new entries resume after a few healthy loops."),
+             (DAILY_HALT_UNTIL, "Daily loss limit hit", "Live trading pauses until the next UTC day.")]
+    for key, label, explain in flags:
+        v = st.get(key)
+        if v and not (key == DAILY_HALT_UNTIL and int(v) < now):
+            danger = key in (KILL_SWITCH, DAILY_HALT_UNTIL)
+            detail = _utc(int(v)).strftime("%Y-%m-%d %H:%M UTC") if key == DAILY_HALT_UNTIL else v
+            parts.append(f'<div class="notice{" danger" if danger else ""}"><b>{label}.</b> '
+                         f'{explain} <span class="muted">({escape(str(detail))})</span></div>')
     parts.append(
-        '<section><h2>Results</h2><div class="grid">'
-        f'<div class="tile"><span class="lbl">Paper P&amp;L, USD ({s["paper_bots"]} bots)</span>'
-        f'<b>{_money(s["paper_pnl"])}</b><span class="lbl">today '
-        f'{_money(s["paper_pnl_today"])}</span></div>'
-        f'<div class="tile"><span class="lbl">Live P&amp;L, USD ({s["live_bots"]} bots)</span>'
-        f'<b>{_money(s["live_pnl"])}</b><span class="lbl">today '
-        f'{_money(s["live_pnl_today"])}</span></div>'
-        f'<div class="tile"><span class="lbl">Protected funds (house money)</span>'
-        f'<b>${s["protected"]:.2f}</b><span class="lbl">never traded again</span></div>'
-        f'<div class="tile"><span class="lbl">Last trading loop</span><b>{hb_txt}</b></div>'
+        '<div class="notice">Live trading is never risk-free. If live mode is unlocked, real '
+        f'money can be lost up to the configured caps: ${risk["daily_loss_limit_usd"]} per '
+        f'day and ${risk["total_drawdown_kill_usd"]} in total before the kill switch, with '
+        f'at most ${risk["max_total_capital_usd"]} of capital (hard ceiling '
+        f'${HARD_CAPITAL_CEILING_USD:.0f}). Past results do not guarantee future profits.'
+        '</div>')
+
+    # -- 2. pipeline ------------------------------------------------------------
+    counts = {r["status"]: r["n"] for r in conn.execute(
+        "SELECT status, COUNT(*) n FROM deployed_bots GROUP BY status")}
+    cand = {r["stage"]: r["n"] for r in conn.execute(
+        "SELECT stage, COUNT(*) n FROM candidates GROUP BY stage")}
+    run = conn.execute("SELECT run_id, data_label, finished_at FROM runs WHERE finished_at IS NOT NULL "
+                       "ORDER BY finished_at DESC LIMIT 1").fetchone()
+    gens_done = conn.execute("SELECT COUNT(*) FROM generations WHERE run_id=?",
+                             (run["run_id"],)).fetchone()[0] if run else 0
+    graves = conn.execute("SELECT COUNT(*) FROM graveyard").fetchone()[0]
+    waiting_n = counts.get("ready_to_graduate", 0) + counts.get("approved", 0)
+    ecfg = cfg["evolution"]
+    steps = [
+        ("", "1 · Evolution", f'{ecfg["population_size"]}',
+         f'bots per generation, {gens_done} generations in the last run, {graves} retired to the '
+         'graveyard so far' if run else 'bots per generation. No run finished yet.'),
+        ("", "2 · Unseen-data test", f'{cand.get("awaiting_paper", 0) + cand.get("deployed", 0)}',
+         f'passed ({cand.get("test_failed", 0)} failed). Passed bots wait for a paper slot.'),
+        ("", "3 · Paper trading", f'{counts.get("paper", 0)} / {cfg["paper"]["max_bots"]}',
+         f'slots in use. Needs {cfg["graduation"]["min_paper_days"]}+ days, '
+         f'{cfg["graduation"]["min_paper_trades"]}+ trades, profit, low drawdown.'),
+        ("hot" if waiting_n else "", "4 · Your approval", f'{waiting_n}',
+         'waiting for you' if waiting_n else 'nothing waiting. You get a Telegram alert.'),
+        ("live", "5 · Live", f'{counts.get("live", 0)} / {risk["max_live_bots"]}',
+         f'bots with real money, at most ${risk["max_per_bot_usd"]} each'
+         if mode == "LIVE" else 'locked while in paper mode'),
+    ]
+    parts.append('<section id="pipeline"><h2>How a bot gets to real money</h2>'
+                 '<p class="help">Every bot must pass each stage in order. Losers are retired at '
+                 'every step and their cause of death is recorded so new bots avoid it.</p>'
+                 '<div class="pipe">' + "".join(
+                     f'<div class="step {cls}"><div class="t">{escape(t)}</div><b>{n}</b>'
+                     f'<div class="d">{escape(d)}</div></div>' for cls, t, n, d in steps)
+                 + '</div></section>')
+
+    # -- 3. results -------------------------------------------------------------
+    best = s["best"]
+    best_txt = (f'{escape(best["bot_id"])} <span class="lbl">'
+                f'{_pct(best["pnl"] / best["allocation"])} ({best["mode"]})</span>') if best else "—"
+    parts.append(
+        '<section id="results"><h2>Results</h2>'
+        '<p class="help">Profit and loss in USD across all bots, since each one started.</p>'
+        '<div class="grid">'
+        f'<div class="tile"><span class="lbl">Paper P&amp;L ({s["paper_bots"]} bots)</span>'
+        f'<b>{_money(s["paper_pnl"])}</b><span class="lbl">today {_money(s["paper_pnl_today"])}</span></div>'
+        f'<div class="tile"><span class="lbl">Live P&amp;L ({s["live_bots"]} bots)</span>'
+        f'<b>{_money(s["live_pnl"])}</b><span class="lbl">today {_money(s["live_pnl_today"])}</span></div>'
+        f'<div class="tile"><span class="lbl">Best bot</span><b style="font-size:16px">{best_txt}</b></div>'
+        f'<div class="tile"><span class="lbl">Protected funds</span><b>${s["protected"]:.2f}</b>'
+        '<span class="lbl">locked profit, never traded again</span></div>'
         '</div></section>')
 
-    parts.append(
-        '<section><h2>Limits</h2><table>'
-        + "".join(f"<tr><th>{escape(k)}</th><td class='n'>{escape(str(v))}</td></tr>" for k, v in (
-            ("Max total live capital", f"${risk['max_total_capital_usd']}"),
-            ("Max per bot", f"${risk['max_per_bot_usd']}"),
-            ("Max live bots", risk["max_live_bots"]),
-            ("Daily loss limit", f"${risk['daily_loss_limit_usd']}"),
-            ("Total drawdown kill", f"${risk['total_drawdown_kill_usd']}"),
-            ("live_enabled in config", cfg.get("live_enabled") is True)))
-        + "</table></section>")
-
+    # -- 4. bots ----------------------------------------------------------------
     waiting = conn.execute("SELECT * FROM deployed_bots WHERE status='ready_to_graduate'").fetchall()
+    bots_parts = []
     if waiting:
-        rows = []
+        cards = []
         for b in waiting:
             g = Genome.from_dict(json.loads(b["genome_json"]))
-            form = ""
+            acc = conn.execute("SELECT * FROM accounts WHERE bot_id=? AND mode='paper' "
+                               "ORDER BY account_id DESC LIMIT 1", (b["bot_id"],)).fetchone()
+            bid = escape(b["bot_id"])
             if approvals_enabled:
-                bid = escape(b["bot_id"])
-                form = (f'<form method="post" action="/bots/{bid}/approve">'
+                form = (f'<form class="approve" method="post" action="/bots/{bid}/approve">'
                         '<input type="password" name="token" placeholder="dashboard token" '
-                        'required aria-label="dashboard token"> <button>Approve</button> '
-                        f'<button formaction="/bots/{bid}/decline">Decline</button></form>')
+                        'required aria-label="dashboard token" autocomplete="current-password"> '
+                        '<button class="primary">Approve</button> '
+                        f'<button class="danger" formaction="/bots/{bid}/decline">Decline</button></form>')
             else:
-                form = '<span class="muted">Approve from Telegram (no DASHBOARD_TOKEN set)</span>'
-            rows.append(f"<tr><td>{escape(b['bot_id'])}</td><td>{escape(g.describe())}</td>"
-                        f"<td>{form}</td></tr>")
-        parts.append('<section><h2>Ready to graduate — needs your approval</h2><table class="wide">'
-                     '<tr><th>Bot</th><th>Strategy</th><th></th></tr>' + "".join(rows) +
-                     '</table></section>')
+                form = ('<p class="muted" style="margin:8px 0 0">Approve from Telegram '
+                        '(no DASHBOARD_TOKEN set).</p>')
+            if acc:
+                a = dict(acc)
+                a.update(genome_json=b["genome_json"], status=b["status"],
+                         pnl=a["last_equity"] - a["allocation"])
+                cards.append(_bot_card(a, cfg, conn, now, "paper", form))
+            else:
+                cards.append(f'<div class="bot"><div class="head"><span class="id">{bid}</span>'
+                             '<span class="badge ready">READY FOR APPROVAL</span></div>'
+                             f'<div class="strategy">{escape(g.describe())}</div>{form}</div>')
+        bots_parts.append(
+            f'<h2>Ready to graduate — needs your approval <span class="count">{len(waiting)}</span></h2>'
+            '<p class="help">These bots passed 30+ days of paper trading. Approving one lets it '
+            'trade real money once live mode is unlocked, inside the caps. Declining retires it.</p>'
+            f'<div class="cards">{"".join(cards)}</div>')
 
-    for mode_name, title in (("live", "Live bots"), ("paper", "Paper bots")):
-        accs = account_rows(conn, mode_name)
+    for mode_name, title, help_txt in (
+            ("live", "Live bots", "Trading real money. Each has its own allocation and stop-loss."),
+            ("paper", "Paper bots", "Trading fake money at real prices. The bars show how close "
+                                    "each one is to graduating.")):
+        accs = [a for a in account_rows(conn, mode_name) if a["status"] != "ready_to_graduate"]
+        head = f'<h2>{title} <span class="count">{len(accs)}</span></h2><p class="help">{help_txt}</p>'
         if not accs:
-            parts.append(f'<section><h2>{title}</h2><p class="muted">None.</p></section>')
+            why = ("None yet. Bots arrive here after the nightly evolution and the unseen-data test."
+                   if mode_name == "paper" else
+                   "None. Live bots appear only after your approval and the live unlock.")
+            bots_parts.append(head + f'<p class="muted">{why}</p>')
             continue
-        rows = "".join(
-            f"<tr><td>{escape(a['bot_id'])}</td><td>{escape(a['status'])}</td>"
-            f"<td>{escape(Genome.from_dict(json.loads(a['genome_json'])).describe())}</td>"
-            f"<td class='n'>${a['allocation']:.2f}</td><td class='n'>${a['last_equity']:.2f}</td>"
-            f"<td class='n'>{_pct(a['pnl'] / a['allocation'])}</td>"
-            f"<td class='n'>{a['max_drawdown'] * 100:.1f}%</td><td class='n'>{a['trades']}</td>"
-            f"<td class='n'>{'open' if a['qty'] else 'flat'}</td>"
-            f"<td class='n'>${a['protected']:.2f}</td></tr>" for a in accs)
-        parts.append(f'<section><h2>{title}</h2><table class="wide"><tr><th>Bot</th><th>Status</th>'
-                     '<th>Strategy</th><th>Start</th><th>Equity</th><th>Return</th><th>Max DD</th>'
-                     '<th>Trades</th><th>Position</th><th>Protected</th></tr>'
-                     f'{rows}</table></section>')
+        bots_parts.append(head + '<div class="cards">' + "".join(
+            _bot_card(a, cfg, conn, now, mode_name) for a in accs) + '</div>')
+    parts.append('<section id="bots">' + "<hr style='border:0;border-top:1px solid var(--line);"
+                 "margin:16px 0'>".join(bots_parts) + '</section>')
 
-    run = conn.execute("SELECT run_id, data_label FROM runs WHERE finished_at IS NOT NULL "
-                       "ORDER BY finished_at DESC LIMIT 1").fetchone()
+    # -- 5. evolution -----------------------------------------------------------
+    evo = ['<section id="evolution"><h2>Evolution</h2>'
+           '<p class="help">Every night at '
+           f'{w["evolution_hour_utc"]:02d}:00 UTC, {ecfg["population_size"]} bots are backtested on '
+           f'{cfg["data"]["history_years"]} years of history for {ecfg["generations"]} generations. '
+           'The worst die, the best breed. Fitness = risk-adjusted return after fees, minus '
+           'penalties.</p>']
     if run:
         gens = [dict(r) for r in conn.execute(
             "SELECT generation, best, median, worst, failure_summary FROM generations "
             "WHERE run_id=? ORDER BY generation", (run["run_id"],))]
-        parts.append(f'<section><h2>Generation progress — run {escape(run["run_id"])}</h2>'
-                     f'<p class="muted">{escape(run["data_label"])}. Fitness = risk-adjusted '
-                     f'return after fees, minus penalties.</p>{progress_chart(gens)}'
-                     + (f'<p>{escape(gens[-1]["failure_summary"])}</p>' if gens else "")
-                     + '</section>')
-        top = conn.execute("SELECT * FROM population WHERE run_id=? ORDER BY rank LIMIT 20",
+        evo.append(f'<p class="muted" style="font-size:13px">Last run {escape(run["run_id"])} · '
+                   f'{escape(run["data_label"])}</p>{progress_chart(gens)}')
+        if gens:
+            evo.append(f'<p style="font-size:14px">{escape(gens[-1]["failure_summary"])}</p>')
+        top = conn.execute("SELECT * FROM population WHERE run_id=? ORDER BY rank LIMIT 10",
                            (run["run_id"],)).fetchall()
         rows = []
         for r in top:
             sm = json.loads(r["summary_json"])
             g = Genome.from_dict(json.loads(r["genome_json"]))
-            rows.append(f"<tr><td class='n'>{r['rank'] + 1}</td><td>{escape(g.describe())}</td>"
-                        f"<td class='n'>{r['fitness']:.3f}</td><td class='n'>{_pct(sm['return'])}</td>"
-                        f"<td class='n'>{_pct(sm['hold_return'])}</td>"
-                        f"<td class='n'>{sm['max_drawdown'] * 100:.1f}%</td>"
-                        f"<td class='n'>{sm['trades']}</td></tr>")
-        parts.append('<section><h2>Population leaderboard (train period)</h2><table class="wide"><tr><th>#</th>'
-                     '<th>Strategy</th><th>Fitness</th><th>Return</th><th>Hold</th><th>Max DD</th>'
-                     '<th>Trades</th></tr>' + "".join(rows) + '</table></section>')
+            rows.append([str(r["rank"] + 1), escape(g.describe()), f'{r["fitness"]:.3f}',
+                         _pct(sm["return"]), _pct(sm["hold_return"]),
+                         f'{sm["max_drawdown"] * 100:.1f}%', str(sm["trades"])])
+        evo.append('<h2 style="margin-top:16px">Top 10 of the last run</h2>'
+                   '<p class="help">Ranked on the training period. "Hold" is what simply holding '
+                   'the coin would have returned over the same time.</p>'
+                   + _table([("#", "n"), ("Strategy", "wide"), ("Fitness", "n"), ("Return", "n"),
+                             ("Hold", "n"), ("Max DD", "n"), ("Trades", "n")], rows))
         summaries = conn.execute("SELECT generation, failure_summary FROM generations WHERE "
                                  "run_id=? ORDER BY generation DESC LIMIT 5",
                                  (run["run_id"],)).fetchall()
-        parts.append('<section><h2>Recent failure summaries</h2><ul>' + "".join(
-            f"<li>{escape(r['failure_summary'])}</li>" for r in summaries) + '</ul></section>')
+        evo.append('<h2 style="margin-top:16px">What killed bots recently</h2><ul>' + "".join(
+            f"<li>{escape(r['failure_summary'])}</li>" for r in summaries) + '</ul>')
+    else:
+        evo.append('<p class="muted">No evolution run has finished yet. The first one starts '
+                   f'{_next_at(w["evolution_hour_utc"], now)} once the history download is done.</p>')
+    evo.append('</section>')
+    parts.append("".join(evo))
 
+    # -- 6. briefing ------------------------------------------------------------
     digest = latest_digest(conn)
     fg = latest_fear_greed(conn)
-    mood = (f'<p>Fear &amp; Greed Index: <b>{fg[1]}</b>/100 '
-            f'<span class="muted">({_dt.datetime.fromtimestamp(fg[0] / 1000, _dt.timezone.utc):%Y-%m-%d})'
-            '</span></p>') if fg else '<p class="muted">No Fear &amp; Greed data yet.</p>'
-    when = (f'<p class="muted">Written {_dt.datetime.fromtimestamp(digest["ts"] / 1000, _dt.timezone.utc):%Y-%m-%d %H:%M} UTC'
-            f'{" by Claude" if digest["used_ai"] else " (plain digest, no AI)"}.</p>') if digest else ""
-    parts.append('<section><h2>Market mood and AI analyst</h2>' + mood
-                 + '<p class="muted">The analyst reads news and the public channels you list and '
+    if fg:
+        label = ("extreme fear" if fg[1] < 25 else "fear" if fg[1] < 45 else "neutral" if fg[1] < 55
+                 else "greed" if fg[1] < 75 else "extreme greed")
+        mood = (f'<div class="mood"><div>Fear &amp; Greed Index: <b>{fg[1]}</b>/100 '
+                f'<span class="muted">{label}, {_utc(fg[0]):%Y-%m-%d}</span></div>'
+                f'<div class="dial"><i style="left:{fg[1]}%"></i></div></div>')
+    else:
+        mood = '<p class="muted">No Fear &amp; Greed data yet.</p>'
+    when = (f'<p class="muted" style="font-size:13px">Written {_utc(digest["ts"]):%Y-%m-%d %H:%M} UTC'
+            f'{" by Claude" if digest["used_ai"] else " (plain digest, no AI key set)"}.</p>'
+            ) if digest else ""
+    parts.append('<section id="briefing"><h2>Market mood and AI analyst</h2>'
+                 '<p class="help">The analyst reads crypto news and the public channels you list and '
                  'writes you a briefing. It is information only: the trading bots never read it '
-                 'and it cannot place or change a trade.</p>'
+                 'and it cannot place or change a trade.</p>' + mood
                  + (when + f'<div class="digest">{escape(digest["text"])}</div>' if digest
                     else '<p class="muted">No briefing yet.</p>') + '</section>')
 
+    # -- 7. risk log -------------------------------------------------------------
     events = conn.execute("SELECT * FROM risk_events ORDER BY ts DESC LIMIT 20").fetchall()
-    ev_rows = "".join(
-        f"<tr><td>{_dt.datetime.fromtimestamp(e['ts'] / 1000, _dt.timezone.utc):%Y-%m-%d %H:%M}"
-        f"</td><td>{escape(e['kind'])}</td><td>{escape(e['detail'])}</td></tr>" for e in events)
-    parts.append('<section><h2>Risk events</h2>' + (
-        f'<table class="wide"><tr><th>UTC</th><th>Kind</th><th>Detail</th></tr>{ev_rows}</table>'
-        if events else '<p class="muted">None.</p>') + '</section>')
+    ev = "".join(
+        f'<li><time>{_utc(e["ts"]):%Y-%m-%d %H:%M} UTC</time><span class="kind">'
+        f'{escape(e["kind"].replace("_", " "))}</span>{escape(e["detail"])}</li>' for e in events)
+    parts.append('<section id="events"><h2>Risk log</h2>'
+                 '<p class="help">Everything the risk guard refused, halted or changed. Last 20.</p>'
+                 + (f'<ul class="events" style="list-style:none;padding:0;margin:0">{ev}</ul>'
+                    if events else '<p class="muted">Nothing yet.</p>') + '</section>')
+
+    # -- 8. limits and how it works ---------------------------------------------
+    parts.append(
+        '<section id="limits"><h2>Hard limits</h2>'
+        '<p class="help">Set in bots/config.yaml. The code refuses anything above the $100 ceiling.</p>'
+        + _table([("Rule", "wide"), ("Value", "n")], [
+            ["Max total live capital", f"${risk['max_total_capital_usd']}"],
+            ["Max per bot", f"${risk['max_per_bot_usd']}"],
+            ["Max live bots", str(risk["max_live_bots"])],
+            ["Daily loss limit", f"${risk['daily_loss_limit_usd']}"],
+            ["Total drawdown kill switch", f"${risk['total_drawdown_kill_usd']}"],
+            ["live_enabled in config", "yes" if cfg.get("live_enabled") is True else "no"]])
+        + '<h2 style="margin-top:16px">How to read this page</h2><div class="how">'
+        '<div><b>Paper mode</b>Fake money at real prices. Every bot starts here.</div>'
+        '<div><b>Graduation</b>A paper bot asks for your approval after 30+ days, 20+ trades, profit '
+        'after fees, drawdown under 10%, and beating "just hold the coin".</div>'
+        '<div><b>Drawdown</b>The worst drop from a bot\'s peak equity. Smaller is safer.</div>'
+        '<div><b>Protected funds</b>When a live bot doubles its money, its original stake is locked '
+        'and never traded again.</div>'
+        '<div><b>Kill switch</b>If total live losses hit the limit, everything is closed and live '
+        'stays off until you confirm again.</div>'
+        '<div><b>Going live</b>Needs MODE=LIVE, live_enabled: true, LIVE_CONFIRMED.txt and a '
+        'Kraken key that cannot withdraw. Anything missing keeps paper mode.</div>'
+        '</div></section>')
     return "".join(parts)
 
 
@@ -368,18 +764,26 @@ def _graveyard(conn) -> str:
                           "ORDER BY n DESC").fetchall()
     total = sum(r["n"] for r in causes)
     rows = conn.execute("SELECT * FROM graveyard ORDER BY id DESC LIMIT 200").fetchall()
-    body = [f'<section><h2>Causes of death ({total} bots)</h2><table>'
-            '<tr><th>Diagnosis</th><th>Bots</th></tr>' + "".join(
-                f"<tr><td>{escape(r['diagnosis'])}</td><td class='n'>{r['n']}</td></tr>"
-                for r in causes) + '</table></section>']
+    cause_rows = []
+    for r in causes:
+        share = r["n"] / total if total else 0
+        cause_rows.append([escape(r["diagnosis"]), str(r["n"]),
+                           f'<div class="track" style="height:8px;border-radius:4px;background:var(--line)">'
+                           f'<div style="width:{share * 100:.0f}%;height:100%;background:var(--series-2);'
+                           f'border-radius:4px"></div></div>'])
+    body = [f'<section><h2>Causes of death <span class="count">{total} bots</span></h2>'
+            '<p class="help">Why bots were retired during evolution. New bots are steered away from '
+            'repeating the most common causes.</p>'
+            + (_table([("Diagnosis", "wide"), ("Bots", "n"), ("Share", "wide")], cause_rows)
+               if causes else '<p class="muted">No bot has died yet.</p>') + '</section>']
     items = []
     for r in rows:
         g = Genome.from_dict(json.loads(r["genome_json"]))
-        items.append(f"<tr><td>{escape(r['run_id'])} / {r['generation']}</td>"
-                     f"<td>{escape(g.describe())}</td><td>{escape(r['cause'])}</td>"
-                     f"<td>{escape(r['diagnosis'])}</td><td>{escape(r['regime'])}, vol "
-                     f"{r['volatility'] * 100:.0f}%</td></tr>")
-    body.append('<section><h2>Latest 200 dead bots</h2><table class="wide"><tr><th>Run / gen</th>'
-                '<th>Strategy</th><th>Death rule</th><th>Why</th><th>Market</th></tr>'
-                + "".join(items) + '</table></section>')
+        items.append([f'{escape(r["run_id"])} / {r["generation"]}', escape(g.describe()),
+                      escape(r["cause"]), escape(r["diagnosis"]),
+                      f'{escape(r["regime"])}, vol {r["volatility"] * 100:.0f}%'])
+    body.append('<section><h2>Latest 200 dead bots</h2>'
+                + (_table([("Run / gen", ""), ("Strategy", "wide"), ("Death rule", ""),
+                           ("Why", "wide"), ("Market", "")], items)
+                   if items else '<p class="muted">Nothing here yet.</p>') + '</section>')
     return "".join(body)
