@@ -283,3 +283,92 @@ def test_owner_pause_blocks_new_entries_but_not_exits(setup):
     clock.t += H
     trader.tick()
     assert guard.ledger.account("b1", "paper")["qty"] == 0
+
+
+def test_paper_exchange_limit_buy_rests_then_fills_at_the_maker_fee():
+    ex = PaperExchange(fee=0.008, slippage=0.0005, maker_fee=0.004)
+    ex.update_price("BTC/USD", 100.0)
+    o = ex.create_order("BTC/USD", "limit", "buy", 2.0, 99.0)
+    assert o["status"] == "open" and o["filled"] == 0
+    ex.update_price("BTC/USD", 99.5, low=99.2)
+    assert ex.fetch_order(o["id"])["status"] == "open"
+    ex.update_price("BTC/USD", 99.5, low=98.9)
+    f = ex.fetch_order(o["id"])
+    assert f["status"] == "closed" and f["average"] == 99.0 and f["fee"]["cost"] == pytest.approx(2 * 99 * 0.004)
+    taker = ex.create_order("BTC/USD", "limit", "buy", 1.0, 120.0)  # already below the limit
+    assert taker["status"] == "closed" and taker["average"] == pytest.approx(99.5 * 1.0005)
+    assert taker["fee"]["cost"] == pytest.approx(1.0 * 99.5 * 1.0005 * 0.008)
+    with pytest.raises(ValueError):
+        ex.create_order("BTC/USD", "limit", "sell", 1.0, 99.0)
+    ex.cancel_order(ex.create_order("BTC/USD", "limit", "buy", 1.0, 90.0)["id"])
+
+
+def test_limit_entry_rests_fills_and_times_out_through_the_guard(setup, monkeypatch):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    cfg["execution"].update(entry_order="limit", limit_timeout_s=120)
+    monkeypatch.setattr(md, "fetch_ticker", lambda pair: {"last": md.price, "bid": md.price * 0.998})
+    add_bot(conn, "b1", "paper", take_profit_pct=10.0)
+    signals["entry"] = True
+    trader.tick()
+    acc = guard.ledger.account("b1", "paper")
+    assert acc["qty"] == 0 and acc["pending_order_id"] and acc["pending_price"] == pytest.approx(50_000 * 0.998)
+    signals["entry"] = False
+    clock.t += 30_000
+    md.price, md.low = 49_950, 49_850  # traded below the bid: the resting order fills
+    trader.tick()
+    acc = guard.ledger.account("b1", "paper")
+    assert acc["qty"] > 0 and acc["pending_order_id"] is None and acc["stop_order_id"]
+    assert acc["entry_price"] == pytest.approx(50_000 * 0.998)  # our price, no slippage
+    fill = conn.execute("SELECT fee, qty, price FROM fills WHERE side='buy'").fetchone()
+    assert fill[0] == pytest.approx(fill[1] * fill[2] * cfg["backtest"]["maker_fee_pct"] / 100)
+    # Timeout: a bid that never fills is withdrawn, nothing is bought.
+    add_bot(conn, "b2", "paper")
+    md.price, md.low = 50_000, None
+    clock.t += H
+    signals["entry"] = True
+    trader.tick()
+    assert guard.ledger.account("b2", "paper")["pending_order_id"]
+    signals["entry"] = False
+    clock.t += 121_000
+    trader.tick()
+    b2 = guard.ledger.account("b2", "paper")
+    assert b2["pending_order_id"] is None and b2["qty"] == 0
+    assert paper.fetch_order(list(paper.orders)[-1])["status"] == "canceled"
+    # An exit signal while the entry rests withdraws it (timeout set long enough to see it).
+    cfg["execution"]["limit_timeout_s"] = 10 * 3600
+    clock.t += H
+    signals["entry"] = True
+    trader.tick()
+    assert guard.ledger.account("b2", "paper")["pending_order_id"]
+    signals.update(entry=False, exit=True)
+    clock.t += H
+    trader.tick()
+    assert guard.ledger.account("b2", "paper")["pending_order_id"] is None
+    assert any("withdrawn" in r[0] for r in conn.execute("SELECT detail FROM risk_events"))
+    # close_all withdraws resting entries too.
+    signals.update(entry=True, exit=False)
+    clock.t += H
+    trader.tick()
+    assert guard.ledger.account("b2", "paper")["pending_order_id"]
+    guard.close_all("paper", "test")
+    assert guard.ledger.account("b2", "paper")["pending_order_id"] is None
+
+
+def test_paper_slots_are_spread_over_coins_and_rules(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    cfg["paper"].update(max_bots=10, max_per_pair=2, max_per_entry_type=2)
+    from bots.tests.test_strategy import base_genome
+    specs = [("BTC/USD", "ema_cross"), ("BTC/USD", "ema_cross"), ("BTC/USD", "breakout"),
+             ("ETH/USD", "ema_cross"), ("ETH/USD", "breakout"), ("SOL/USD", "macd")]
+    for i, (pair, rule) in enumerate(specs):
+        g = base_genome(pair=pair, entry_type=rule, fast_period=5 + i)
+        conn.execute("INSERT INTO candidates VALUES (?,'r',?,?,'{}','{}',1,'awaiting_paper','t')",
+                     (g.hash(), g.to_json(), 10 - i))
+    conn.commit()
+    assert trader.deploy_candidates() == 4
+    deployed = [trader.genome(b) for b in trader.bots(("paper",))]
+    assert sum(g.pair == "BTC/USD" for g in deployed) == 2
+    assert sum(g.entry_type == "ema_cross" for g in deployed) == 2
+    assert {(g.pair, g.entry_type) for g in deployed} == {
+        ("BTC/USD", "ema_cross"), ("ETH/USD", "breakout"), ("SOL/USD", "macd")}
+    assert conn.execute("SELECT COUNT(*) FROM candidates WHERE stage='awaiting_paper'").fetchone()[0] == 2

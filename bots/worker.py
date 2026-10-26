@@ -146,7 +146,8 @@ class Worker:
                 live = None
 
         bt = self.cfg["backtest"]
-        self.paper = PaperExchange(bt["taker_fee_pct"] / 100, bt["slippage_pct"] / 100)
+        self.paper = PaperExchange(bt["taker_fee_pct"] / 100, bt["slippage_pct"] / 100,
+                                   maker_fee=bt.get("maker_fee_pct", bt["taker_fee_pct"]) / 100)
         self.guard = RiskGuard(self.cfg, self.conn, self.paper, live, self.alerter, self.env)
         md = self._market_data or ReadOnlyExchange(make_exchange(self.cfg["data"]["exchange"]))
         self.trader = Trader(self.cfg, self.conn, self.guard, md, self.paper, self.alerter)

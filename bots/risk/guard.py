@@ -35,7 +35,7 @@ from bots.risk.state import (CRASH_LOCK, DAILY_HALT_UNTIL, ENTRY_HALT, KILL_SWIT
 
 HARD_CAPITAL_CEILING_USD = 100.0
 CONFIRM_FILE = "LIVE_CONFIRMED.txt"
-ORDER_TYPES = ("market", "stop_loss")
+ORDER_TYPES = ("market", "stop_loss", "limit")  # limit: resting buy entries only
 SIDES = ("buy", "sell")
 REQUIRED_RISK_KEYS = ("max_total_capital_usd", "max_per_bot_usd", "max_live_bots",
                       "daily_loss_limit_usd", "total_drawdown_kill_usd")
@@ -75,7 +75,8 @@ class OrderRequest:
     pair: str
     side: str                   # buy | sell
     amount: float               # base currency quantity
-    order_type: str = "market"  # market | stop_loss
+    order_type: str = "market"  # market | stop_loss | limit
+    price: float | None = None  # limit price (limit orders only)
     stop_price: float | None = None
     ref_price: float | None = None  # expected price, used for cost checks on buys
     reason: str = ""
@@ -174,6 +175,7 @@ class RiskGuard:
         self._healthy_ticks = 0
         bt = cfg["backtest"]
         self.fee = bt["taker_fee_pct"] / 100
+        self.maker_fee = bt.get("maker_fee_pct", bt["taker_fee_pct"]) / 100
         self.slippage = bt["slippage_pct"] / 100
 
     # -- views -------------------------------------------------------------
@@ -210,6 +212,8 @@ class RiskGuard:
             if req.order_type == "stop_loss":
                 order = exchange.create_order(req.pair, "market", "sell", req.amount, None,
                                               {"stopLossPrice": req.stop_price})
+            elif req.order_type == "limit":
+                order = exchange.create_order(req.pair, "limit", "buy", req.amount, req.price)
             else:
                 order = exchange.create_order(req.pair, "market", req.side, req.amount)
         except Exception as e:  # noqa: BLE001 - any exchange failure is a fail-safe event
@@ -249,6 +253,9 @@ class RiskGuard:
                 raise OrderRefused("a stop-loss must be a sell with a positive stop price")
             if acc["stop_order_id"]:
                 raise OrderRefused("position already has a stop-loss")
+        if req.order_type == "limit":
+            if req.side != "buy" or not req.price or not math.isfinite(req.price) or req.price <= 0:
+                raise OrderRefused("a limit order must be a buy with a positive price")
         if req.side == "sell":
             if req.amount > acc["qty"] * (1 + 1e-9) + 1e-12:
                 raise OrderRefused(f"sell of {req.amount} exceeds holding {acc['qty']} "
@@ -263,6 +270,8 @@ class RiskGuard:
             raise OrderRefused(f"bot status {status!r} may not open {req.mode} trades")
         if acc["qty"] > 0 or acc["stop_order_id"]:
             raise OrderRefused("bot already has an open position (one per bot)")
+        if acc["pending_order_id"]:
+            raise OrderRefused("bot already has an entry order resting (one per bot)")
         if self.state.is_set(ENTRY_HALT):
             raise OrderRefused(f"new entries halted: {self.state.get(ENTRY_HALT)}")
         if self.state.is_set(OWNER_PAUSE):
@@ -326,19 +335,51 @@ class RiskGuard:
     # -- composite actions -------------------------------------------------
 
     def enter_long(self, bot_id: str, mode: str, pair: str, ref_price: float,
-                   size_pct: float, stop_pct: float, target_pct: float, reason: str) -> bool:
-        """Buy, then immediately place the stop-loss. No stop = position closed at once."""
+                   size_pct: float, stop_pct: float, target_pct: float, reason: str,
+                   limit_price: float | None = None) -> bool:
+        """Open a long. Returns True when the position is open, False when a limit entry rests.
+
+        With execution.entry_order = limit, the buy rests at `limit_price` (the bid, or
+        ref_price) and pays the maker fee when it fills; sync_pending() finishes the
+        entry on a later loop or cancels it after execution.limit_timeout_s. A market
+        entry fills now. Either way the stop-loss goes on right after the fill, and a
+        position whose stop cannot be placed is closed at once.
+        """
         acc = self.ledger.account(bot_id, mode)
         if acc is None:
             raise OrderRefused(f"no active {mode} account for {bot_id}")
+        execution = self.cfg.get("execution") or {}
+        use_limit = execution.get("entry_order") == "limit"
+        px = (limit_price or ref_price) if use_limit else ref_price
         budget = self.ledger.tradable_cash(acc) * size_pct / 100
-        amount = budget / (ref_price * (1 + self.slippage) * (1 + self.fee))
+        amount = budget / (px * (1 + self.slippage) * (1 + self.fee))
         if mode == "live":
             amount = float(self._live.amount_to_precision(pair, amount))
+        if use_limit:
+            order = self.place_order(OrderRequest(bot_id, mode, pair, "buy", amount,
+                                                  order_type="limit", price=px, ref_price=px,
+                                                  reason=reason))
+            if order.get("status") == "closed" and order.get("filled"):
+                self._complete_entry(acc, bot_id, mode, pair, order, stop_pct, target_pct, reason)
+                return True
+            self.ledger.set_pending(acc["account_id"], str(order["id"]), px, amount, self.clock(),
+                                    stop_pct, target_pct, reason)
+            return False
         order = self.place_order(OrderRequest(bot_id, mode, pair, "buy", amount,
                                               ref_price=ref_price, reason=reason))
-        qty, price, fee = self._settle(mode, order, pair, "buy")
+        self._settle(mode, order, pair, "buy")
+        order = self._exchange(mode).fetch_order(order["id"], pair)
+        self._complete_entry(acc, bot_id, mode, pair, order, stop_pct, target_pct, reason)
+        return True
+
+    def _complete_entry(self, acc, bot_id: str, mode: str, pair: str, order: dict,
+                        stop_pct: float, target_pct: float, reason: str) -> None:
+        """Record a filled buy and place its stop-loss. No stop = position closed at once."""
+        qty, price = float(order["filled"]), float(order["average"])
+        maker = order.get("type") == "limit"
+        fee = self._fee_of(order, qty * price, self.maker_fee if maker else self.fee)
         stop, target = price * (1 - stop_pct / 100), price * (1 + target_pct / 100)
+        acc = self.ledger.by_id(acc["account_id"])
         self.ledger.record_buy(acc, qty, price, fee, self.clock(), stop, target,
                                str(order.get("id")), reason)
         try:
@@ -350,11 +391,47 @@ class RiskGuard:
             self._event("stop_failed", f"{bot_id} {mode} {pair}: stop could not be placed ({e}); "
                                        "closing the position now", kind="critical")
             self.exit_long(bot_id, mode, "stop could not be placed")
-        return True
+
+    def sync_pending(self, bot_id: str, mode: str) -> str:
+        """Finish or cancel a resting limit entry. Returns filled | open | cancelled | none."""
+        acc = self.ledger.account(bot_id, mode)
+        if acc is None or not acc["pending_order_id"]:
+            return "none"
+        pair = self._pair(bot_id)
+        ex = self._exchange(mode)
+        order = ex.fetch_order(acc["pending_order_id"], pair)
+        timeout_ms = float((self.cfg.get("execution") or {}).get("limit_timeout_s", 120)) * 1000
+        if order.get("status") == "open" and self.clock() - int(acc["pending_ts"]) >= timeout_ms:
+            self._cancel(mode, acc["pending_order_id"], pair)
+            order = ex.fetch_order(acc["pending_order_id"], pair)
+            if order.get("status") == "open":
+                return "open"
+        status = order.get("status")
+        if status == "open":
+            return "open"
+        self.ledger.clear_pending(acc["account_id"])
+        if order.get("filled"):  # full, or partial before a cancel
+            self._complete_entry(acc, bot_id, mode, pair, order, acc["pending_stop_pct"],
+                                 acc["pending_target_pct"], acc["pending_reason"])
+            return "filled"
+        return "cancelled"
+
+    def cancel_pending(self, bot_id: str, mode: str, reason: str) -> None:
+        """Withdraw a resting entry (exit signal, close-all, kill). A partial fill is kept."""
+        acc = self.ledger.account(bot_id, mode)
+        if acc is None or not acc["pending_order_id"]:
+            return
+        self._cancel(mode, acc["pending_order_id"], self._pair(bot_id))
+        self._event("entry_cancelled", f"{bot_id} {mode}: resting entry withdrawn ({reason})",
+                    kind="info")
+        self.sync_pending(bot_id, mode)
 
     def exit_long(self, bot_id: str, mode: str, reason: str) -> float | None:
         """Cancel the stop and sell the whole position at market."""
         acc = self.ledger.account(bot_id, mode)
+        if acc is not None and acc["pending_order_id"] and acc["qty"] <= 0:
+            self.cancel_pending(bot_id, mode, reason)
+            acc = self.ledger.account(bot_id, mode)
         if acc is None or acc["qty"] <= 0:
             return None
         pair = self._pair(bot_id)
@@ -413,9 +490,11 @@ class RiskGuard:
         qty, price = float(order["filled"]), float(order["average"])
         return qty, price, self._fee_of(order, qty * price)
 
-    def _fee_of(self, order: dict, notional: float) -> float:
+    def _fee_of(self, order: dict, notional: float, rate: float | None = None) -> float:
         fee = order.get("fee") or {}
-        return float(fee["cost"]) if fee.get("cost") is not None else notional * self.fee
+        if fee.get("cost") is not None:
+            return float(fee["cost"])
+        return notional * (self.fee if rate is None else rate)
 
     def _pair(self, bot_id: str) -> str:
         import json
@@ -518,6 +597,13 @@ class RiskGuard:
 
     def close_all(self, mode: str, reason: str) -> None:
         for acc in self.ledger.active(mode):
+            if acc["pending_order_id"]:
+                try:
+                    self.cancel_pending(acc["bot_id"], mode, reason)
+                except (OrderRefused, OrderFailed) as e:
+                    self._event("cancel_failed", f"could not withdraw {acc['bot_id']} {mode} "
+                                                 f"entry: {e}", kind="critical")
+                acc = self.ledger.by_id(acc["account_id"])
             if acc["qty"] > 0:
                 try:
                     self.exit_long(acc["bot_id"], mode, reason)

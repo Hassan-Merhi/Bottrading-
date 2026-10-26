@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -97,13 +98,27 @@ class Trader:
 
     def deploy_candidates(self) -> int:
         """Move test-passed candidates into paper trading, up to paper.max_bots."""
-        running = len(self.bots(PAPER_STATUSES))
-        room = self.cfg["paper"]["max_bots"] - running
+        pcfg = self.cfg["paper"]
+        running = self.bots(PAPER_STATUSES)
+        room = pcfg["max_bots"] - len(running)
         if room <= 0:
             return 0
-        rows = self.conn.execute(
-            "SELECT * FROM candidates WHERE stage='awaiting_paper' ORDER BY validation_fitness "
-            "DESC LIMIT ?", (room,)).fetchall()
+        # Diversity: ten near-identical bots teach less than ten different ones.
+        per_pair: Counter = Counter(self.genome(b).pair for b in running)
+        per_rule: Counter = Counter(self.genome(b).entry_type for b in running)
+        max_pair = pcfg.get("max_per_pair", pcfg["max_bots"])
+        max_rule = pcfg.get("max_per_entry_type", pcfg["max_bots"])
+        rows = []
+        for row in self.conn.execute("SELECT * FROM candidates WHERE stage='awaiting_paper' "
+                                     "ORDER BY validation_fitness DESC"):
+            g = Genome.from_dict(json.loads(row["genome_json"]))
+            if per_pair[g.pair] >= max_pair or per_rule[g.entry_type] >= max_rule:
+                continue  # stays in the queue for when a slot of its kind frees up
+            per_pair[g.pair] += 1
+            per_rule[g.entry_type] += 1
+            rows.append(row)
+            if len(rows) >= room:
+                break
         for row in rows:
             bot_id = f"bot-{row['genome_hash'][:8]}-{uuid.uuid4().hex[:4]}"
             now = _iso()
@@ -183,9 +198,11 @@ class Trader:
                 upsert_candles(self.conn, pair, tf, df)
 
         prices: dict[str, float] = {}
+        bids: dict[str, float] = {}
         for pair in sorted(pairs):
             try:
-                last = float(self.md.fetch_ticker(pair)["last"])
+                ticker = self.md.fetch_ticker(pair)
+                last = float(ticker["last"])
                 if not (math.isfinite(last) and last > 0):
                     raise DataError("bad ticker price")
             except Exception as e:  # noqa: BLE001
@@ -193,6 +210,9 @@ class Trader:
                 report.errors.append(f"{pair} ticker: {e}")
                 continue
             prices[pair] = last
+            bid = ticker.get("bid")
+            if bid is not None and math.isfinite(float(bid)) and 0 < float(bid) <= last:
+                bids[pair] = float(bid)
             s = series.get((pair, base))
             low = None
             if s is not None:
@@ -215,7 +235,7 @@ class Trader:
             for mode in modes:
                 try:
                     self._run_bot(bot, g, mode, series.get((g.pair, g.timeframe)),
-                                  prices.get(g.pair), report, ctx)
+                                  prices.get(g.pair), report, ctx, bids.get(g.pair))
                 except (OrderRefused, OrderFailed) as e:
                     report.errors.append(f"{bot['bot_id']}: {e}")
         # Live bots keep being managed in PAPER mode (e.g. after a crash): exits and stops
@@ -230,11 +250,16 @@ class Trader:
         return report
 
     def _run_bot(self, bot, g: Genome, mode: str, s: Series | None, price: float | None,
-                 report: TickReport, ctx: MarketContext | None = None) -> None:
+                 report: TickReport, ctx: MarketContext | None = None,
+                 bid: float | None = None) -> None:
         acc = self.guard.ledger.account(bot["bot_id"], mode)
         if acc is None:
             return
         acc = self.guard.ledger.mark(acc["account_id"], price, self.clock())
+        if acc["pending_order_id"]:
+            if self.guard.sync_pending(bot["bot_id"], mode) == "filled":
+                report.entries += 1
+            acc = self.guard.ledger.by_id(acc["account_id"])
         if acc["qty"] > 0:
             if self.guard.sync_stop(bot["bot_id"], mode) is not None:
                 report.exits += 1
@@ -268,10 +293,14 @@ class Trader:
         if acc["qty"] > 0 and exit_[-1]:
             self.guard.exit_long(bot["bot_id"], mode, "signal")
             report.exits += 1
-        elif acc["qty"] == 0 and entry[-1] and acc["trades_today"] < g.max_trades_per_day:
-            self.guard.enter_long(bot["bot_id"], mode, g.pair, price, g.position_size_pct,
-                                  stop_pct_now(s, g), g.take_profit_pct, f"{g.entry_type} entry")
-            report.entries += 1
+        elif acc["pending_order_id"] and exit_[-1]:
+            self.guard.cancel_pending(bot["bot_id"], mode, "exit signal before the entry filled")
+        elif acc["qty"] == 0 and not acc["pending_order_id"] and entry[-1] \
+                and acc["trades_today"] < g.max_trades_per_day:
+            if self.guard.enter_long(bot["bot_id"], mode, g.pair, price, g.position_size_pct,
+                                     stop_pct_now(s, g), g.take_profit_pct,
+                                     f"{g.entry_type} entry", limit_price=bid):
+                report.entries += 1
         self.guard.ledger.mark(acc["account_id"], price, self.clock())
 
     # -- the pipeline gates ------------------------------------------------

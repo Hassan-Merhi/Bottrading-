@@ -29,6 +29,7 @@ backtest:
   # https://www.kraken.com/features/fee-schedule now and then; set it lower only
   # if your account really sits in a higher tier.
   taker_fee_pct: 0.80
+  maker_fee_pct: 0.40                    # Tier 1 maker rate; paid by resting limit entries
   slippage_pct: 0.05                     # per fill
   starting_balance_usd: 20               # matches max_per_bot_usd so sims face real minimums
   # Kraken minimum order sizes for the backtest. Deliberately on the strict
@@ -41,6 +42,15 @@ backtest:
     LINK/USD: {min_qty: 0.2, min_cost_usd: 5}
     ADA/USD: {min_qty: 10, min_cost_usd: 5}
     DOGE/USD: {min_qty: 20, min_cost_usd: 5}
+
+# ---------------------------------------------------------------------------
+# Order execution (backtest, paper and live use the same rule)
+# ---------------------------------------------------------------------------
+execution:
+  entry_order: limit                     # limit: rest a buy at the bid and pay the maker fee;
+                                         # market: buy at once at the taker fee
+  limit_timeout_s: 120                   # cancel an entry that has not filled after this long
+  # Exits (stop, target, trailing, time, signal) are always market orders.
 
 # ---------------------------------------------------------------------------
 # Evolution
@@ -121,6 +131,8 @@ risk:
 paper:
   allocation_usd: 20                     # fake money per paper bot
   max_bots: 10                           # paper bots running at once
+  max_per_pair: 3                        # diversity: slots per coin ...
+  max_per_entry_type: 3                  # ... and per entry rule
   candles: 720                           # recent candles fetched for signals
   retire_drawdown_pct: 25                # a paper bot this far under water retires
 

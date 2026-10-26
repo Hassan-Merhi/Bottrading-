@@ -38,7 +38,9 @@ python -m bots.main run
 ```
 
 The worker, every `worker.poll_seconds`:
-- moves test-passed candidates into paper trading (up to `paper.max_bots`);
+- moves test-passed candidates into paper trading (up to `paper.max_bots`,
+  at most `max_per_pair` per coin and `max_per_entry_type` per rule, so the
+  slots teach something about different strategies);
 - fetches live Kraken candles, checks them, and runs each bot: stop sync,
   target / exit signal, entries on freshly closed candles;
 - enforces the daily loss limit and the kill switch, checks the graduation
@@ -174,11 +176,15 @@ no disk. Leave the Kraken keys unset while paper trading.
 
 ## Before trusting results
 
-- `taker_fee_pct` is 0.80%: Kraken Pro's Tier 1 taker rate since 9 July 2026
-  (0.40% maker / 0.80% taker at $0+ 30-day volume). The bots use market
-  orders, so every fill pays the taker rate; a round trip costs about 1.7%
-  with slippage, which is why most strategies die. Re-check the fee schedule
-  occasionally and lower it only if your account really is in a higher tier.
+- Fees are Kraken Pro's Tier 1 rates since 9 July 2026: `maker_fee_pct` 0.40%
+  and `taker_fee_pct` 0.80%. Entries rest as limit buys at the bid
+  (`execution.entry_order: limit`) and pay the maker rate when they fill;
+  every exit is a market order at the taker rate. A round trip costs about
+  1.25% with slippage, which is still why most strategies die. In the
+  backtest a limit entry counts as filled only when the candle later trades
+  below its open, so bots cannot assume fills they would not have got. An
+  entry that has not filled after `limit_timeout_s` is withdrawn. Re-check
+  the fee schedule occasionally.
 - `min_order` sizes are deliberately strict guesses. Live orders use the larger
   of the config value and Kraken's reported minimum.
 - The pair whitelist is BTC, ETH, SOL, XRP, LINK, ADA and DOGE against USD.

@@ -3,7 +3,10 @@
 It mirrors the slice of the ccxt interface RiskGuard uses, so paper and live
 orders take exactly the same path through the guard. Market orders fill at the
 latest price with slippage and the taker fee. Stop-losses rest until a price
-update trades through them, like a stop-loss order resting on Kraken.
+update trades through them, like a stop-loss order resting on Kraken. Limit
+buys rest until a price update trades at or below their price and then fill
+there at the maker fee; a limit already below the market fills at once as a
+taker, as it would on the exchange.
 """
 from __future__ import annotations
 
@@ -16,8 +19,9 @@ from bots.risk.state import now_ms
 class PaperExchange:
     id = "paper"
 
-    def __init__(self, fee: float, slippage: float, clock=now_ms):
+    def __init__(self, fee: float, slippage: float, clock=now_ms, maker_fee: float | None = None):
         self.fee = fee
+        self.maker_fee = fee if maker_fee is None else maker_fee
         self.slippage = slippage
         self.clock = clock
         self.prices: dict[str, float] = {}
@@ -35,6 +39,10 @@ class PaperExchange:
         for order in self.orders.values():
             if order["symbol"] != pair or order["status"] != "open":
                 continue
+            if order["type"] == "limit":
+                if low <= order["price"]:
+                    self._fill(order, order["price"], maker=True)
+                continue
             stop = order["stopLossPrice"]
             if low <= stop:
                 # A gap through the stop fills at the open, not at the stop.
@@ -49,16 +57,22 @@ class PaperExchange:
     def create_order(self, symbol: str, type: str, side: str, amount: float,
                      price: float | None = None, params: dict | None = None) -> dict:
         params = params or {}
-        if type != "market" or side not in ("buy", "sell") or set(params) - {"stopLossPrice"}:
-            raise ValueError("paper exchange supports spot market orders and stop-losses only")
+        if type not in ("market", "limit") or side not in ("buy", "sell") \
+                or set(params) - {"stopLossPrice"}:
+            raise ValueError("paper exchange supports spot market/limit orders and stop-losses only")
+        if type == "limit" and (side != "buy" or not price or price <= 0 or params):
+            raise ValueError("paper exchange supports plain limit buys only")
         if symbol not in self.prices:
             raise RuntimeError(f"no price for {symbol} yet")
         oid = f"paper-{self._session}-{next(self._ids)}"
         order = {"id": oid, "symbol": symbol, "type": type, "side": side, "amount": amount,
-                 "status": "open", "filled": 0.0, "average": None, "fee": None,
+                 "price": price, "status": "open", "filled": 0.0, "average": None, "fee": None,
                  "timestamp": self.clock()}
         self.orders[oid] = order
-        if "stopLossPrice" in params:
+        if type == "limit":
+            if self.prices[symbol] <= price:  # already marketable: fills now as a taker
+                self._fill(order, self.prices[symbol])
+        elif "stopLossPrice" in params:
             order["stopLossPrice"] = float(params["stopLossPrice"])
             if self.prices[symbol] <= order["stopLossPrice"]:
                 self._fill(order, self.prices[symbol])
@@ -66,10 +80,12 @@ class PaperExchange:
             self._fill(order, self.prices[symbol])
         return dict(order)
 
-    def _fill(self, order: dict, px: float) -> None:
-        px = px * (1 + self.slippage) if order["side"] == "buy" else px * (1 - self.slippage)
+    def _fill(self, order: dict, px: float, maker: bool = False) -> None:
+        if not maker:  # a resting order fills at its own price; a taker pays slippage
+            px = px * (1 + self.slippage) if order["side"] == "buy" else px * (1 - self.slippage)
+        rate = self.maker_fee if maker else self.fee
         order.update(status="closed", filled=order["amount"], average=px,
-                     fee={"cost": order["amount"] * px * self.fee, "currency": "USD"})
+                     fee={"cost": order["amount"] * px * rate, "currency": "USD"})
 
     def fetch_order(self, id: str, symbol: str | None = None) -> dict:
         return dict(self.orders[id])

@@ -261,7 +261,7 @@ class EvolutionRun:
         s = self.market[(g.pair, g.timeframe)]
         _, entries, exits = self._serial_evaluator.cache.get(g)
         stops = self._serial_evaluator.cache.stops(g)
-        cost = CostModel.from_config(self.cfg["backtest"], g.pair)
+        cost = CostModel.from_config(self.cfg["backtest"], g.pair, self.cfg.get("execution"))
         return run_backtest(s, entries, exits, g, s.index_of(period[0]), s.index_of(period[1]),
                             cost, stops).metrics
 
@@ -301,7 +301,7 @@ class EvolutionRun:
         s = self.market[(g.pair, g.timeframe)]
         _, entries, exits = self._serial_evaluator.cache.get(g)
         stops = self._serial_evaluator.cache.stops(g)
-        cost = CostModel.from_config(self.cfg["backtest"], g.pair)
+        cost = CostModel.from_config(self.cfg["backtest"], g.pair, self.cfg.get("execution"))
         r = run_backtest(s, entries, exits, g, s.index_of(period[0]), s.index_of(period[1]),
                          cost, stops)
         return np.array([t.pnl / (t.qty * t.entry_price) for t in r.trades], dtype=float)
