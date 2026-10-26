@@ -51,6 +51,20 @@ class TelegramAlerter:
         except Exception as e:  # noqa: BLE001 - never let alerting crash trading
             print(f"[telegram] send failed: {e}; message was: {text}")
 
+    def send_file(self, path, caption: str = "") -> bool:
+        """Send a file to the owner's chat (sendDocument). Never raises."""
+        try:
+            with open(path, "rb") as fh:
+                r = self.session.post(API.format(token=self.token, method="sendDocument"),
+                                      data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                                      files={"document": (os.path.basename(str(path)), fh)},
+                                      timeout=120)
+            r.raise_for_status()
+            return bool(r.json().get("ok"))
+        except Exception as e:  # noqa: BLE001
+            print(f"[telegram] file send failed: {e}")
+            return False
+
     def poll(self, on_decision: Callable[[str, bool, str], str],
              on_command: Callable[[str], str] | None = None) -> None:
         """Handle button presses and /commands from the owner's chat."""
@@ -76,7 +90,7 @@ class TelegramAlerter:
             if str((msg.get("chat") or {}).get("id")) == self.chat_id and on_command:
                 text = (msg.get("text") or "").strip()
                 if text.startswith("/"):
-                    self.alert(on_command(text.split()[0].lower()), kind="report")
+                    self.alert(on_command(text), kind="report")
 
     def _safe(self, method: str, **payload) -> None:
         try:

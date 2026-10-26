@@ -83,9 +83,13 @@ sees the future (tests check this).
 
 Evolution scores every bot on walk-forward windows of the training period.
 Before a top bot may spend its one-time check on the unseen test period it must
-have made money in **every** training window on its own (`evolution.gate`), so
-a bot that only worked in one lucky stretch never reaches paper trading. The
-test check itself passes only with a profit, at least `min_test_trades` trades
+(`evolution.gate`): have made money in **every** training window on its own, so
+a bot that only worked in one lucky stretch never reaches paper trading; still
+make money in most of its nearby variants (every numeric gene nudged by up to
+10%), so a lucky setting is not mistaken for an edge; and show trade results
+that beat chance (mean trade return over its standard error of at least 2.0
+across 10+ trades). The run report lists each held-back bot with its reason.
+The test check itself passes only with a profit, at least `min_test_trades` trades
 and a drawdown under `max_test_drawdown_pct`; the run report names the rule a
 finalist failed. Each bot's daily equity is kept in `equity_history`, which the
 dashboard draws as a small chart on every bot card.
@@ -107,9 +111,21 @@ no buy or sell calls. Run it by hand with `python -m bots.main digest`.
 
 ## Telegram and dashboard
 
-Set `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` for alerts, the daily report,
-`/status`, and the Approve / Decline buttons on graduation alerts. Only your
-chat is listened to. Set `DASHBOARD_TOKEN` to approve from the dashboard too.
+Set `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` for alerts, the daily report, the
+nightly evolution summary (with the full report attached), and the Approve /
+Decline buttons on graduation alerts. Only your chat is listened to. Set
+`DASHBOARD_TOKEN` to approve from the dashboard too.
+
+Commands you can send the bot: `/status`, `/bots` (every running bot with its
+return), `/digest`, `/pause` (no new trades until `/resume`; exits and stops
+keep working), and `/kill confirm` (close every live position, cancel all
+orders, lock live mode until `confirm-live`).
+
+**Off-site backup.** The nightly backup also sends a compressed copy of the
+database without price candles (a few hundred KB) to your Telegram chat
+(`worker.offsite_backup`). If the server's disk is ever lost, restore by
+unzipping it over `bots.db` in `BOTS_STATE_DIR`; candles re-download.
+`python -m bots.main backup --send` does the same on demand.
 
 ## Risk rules (section 6), enforced in `bots/risk/guard.py`
 

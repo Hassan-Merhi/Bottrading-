@@ -60,6 +60,7 @@ def test_graveyard_penalizes_similar_genomes(conn, cfg):
 def small_cfg(cfg):
     cfg["evolution"].update(population_size=24, generations=4, workers=1, seed=42,
                             walk_forward_windows=3, finalists=3)
+    cfg["evolution"]["gate"].update(neighbours=0, min_trade_tstat=0)  # tested on their own
     cfg["backtest"]["starting_balance_usd"] = 1000
     return cfg
 
@@ -189,3 +190,61 @@ def test_gate_holds_back_bots_that_lost_in_a_train_window(conn, cfg, synthetic_m
     assert reasons == ["lost money on unseen data", "only 2 trades on unseen data (need 5)",
                        "drawdown 40% on unseen data (limit 25%)"]
     assert run._test_verdict({"total_return": 0.1, "n_trades": 5, "max_drawdown": 0.2}) == []
+
+
+def test_robustness_gate_rejects_fragile_and_lucky_bots(conn, cfg, synthetic_market, monkeypatch):
+    import numpy as np
+    from bots.evolution.fitness import Evaluation
+    from bots.strategy.genome import NUMERIC_GENES
+    cfg = small_cfg(cfg)
+    cfg["evolution"]["gate"].update(neighbours=6, neighbour_min_profitable=0.5,
+                                    min_trade_tstat=2.0, min_tstat_trades=10)
+    run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
+    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg, run.ctx)
+    g = run._newcomer()
+    variants = run._neighbours(g, 6, 0.10)
+    assert 1 <= len(variants) <= 6 and all(v != g for v in variants)
+    assert variants == run._neighbours(g, 6, 0.10)  # deterministic per genome
+    for v in variants:
+        d, base = v.to_dict(), g.to_dict()
+        for name, (lo, hi, _) in NUMERIC_GENES.items():
+            assert lo <= d[name] <= hi
+            if base[name] != 0 and name not in ("fast_period", "slow_period", "mood_max"):
+                assert abs(d[name] - base[name]) <= max(abs(base[name]) * 0.10 + 1e-9, 1)
+
+    def fake_eval(returns):
+        def evaluate(genome):
+            r = returns.pop(0)
+            return Evaluation(genome, [{"total_return": r, "max_drawdown": 0.0, "n_trades": 5,
+                                        "hold_return": 0.0}], 0.0, 0, "flat", 0.1)
+        return evaluate
+
+    # Fragile: only 2 of 6 variants make money.
+    monkeypatch.setattr(run._serial_evaluator, "evaluate", fake_eval([0.1, 0.1, -0.1, -0.1, -0.1, -0.1][:len(variants)] + [0.1] * 6))
+    monkeypatch.setattr(run, "_trade_returns", lambda g, p: np.array([0.02] * 12 + [-0.01] * 8))
+    reasons = run._robustness_reasons(g)
+    assert any("fragile" in r for r in reasons)
+    # Robust variants but trades indistinguishable from chance.
+    monkeypatch.setattr(run._serial_evaluator, "evaluate", fake_eval([0.1] * 12))
+    monkeypatch.setattr(run, "_trade_returns", lambda g, p: np.array([0.05, -0.05] * 10))
+    reasons = run._robustness_reasons(g)
+    assert len(reasons) == 1 and "chance" in reasons[0]
+    # Too few trades to judge.
+    monkeypatch.setattr(run._serial_evaluator, "evaluate", fake_eval([0.1] * 12))
+    monkeypatch.setattr(run, "_trade_returns", lambda g, p: np.array([0.05] * 4))
+    assert "need 10" in run._robustness_reasons(g)[0]
+    # Passes: variants profitable and a clear edge.
+    monkeypatch.setattr(run._serial_evaluator, "evaluate", fake_eval([0.1] * 12))
+    monkeypatch.setattr(run, "_trade_returns", lambda g, p: np.array([0.02] * 25 + [-0.005] * 5))
+    assert run._robustness_reasons(g) == []
+
+
+def test_short_summary_names_the_outcome(conn, cfg, synthetic_market):
+    from bots.evolution.summary import short_summary
+    cfg = small_cfg(cfg)
+    run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
+    result = run.run()
+    text = short_summary(result)
+    assert "Evolution run finished: 4 generations" in text and "Gate held back" in text
+    assert ("paper trading" in text) or ("failed" in text)
+    assert all(f"held back: " in render(result, conn) for _ in result.gate_notes[:1])

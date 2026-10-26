@@ -10,6 +10,7 @@ CRASH_LOCK = "crash_lock"                # set when the previous run did not shu
 RUNNING = "running"                      # set while a worker runs, cleared on clean shutdown
 DAILY_HALT_UNTIL = "daily_halt_until"    # ms; live entries blocked until then
 ENTRY_HALT = "entry_halt"                # fail-safe: API errors / bad data block new entries
+OWNER_PAUSE = "owner_pause"              # the owner said /pause: no new entries until /resume
 LIVE_EPOCH = "live_epoch"                # bumps on each owner confirmation
 LAST_MODE = "last_mode"
 HEARTBEAT = "heartbeat"                  # ms of the last completed trading loop

@@ -119,6 +119,15 @@ def cmd_evolve(cfg, conn, args) -> None:
     print()
     print(report)
     print(f"Report written to {out}")
+    from bots.analyst.digest import for_telegram
+    from bots.evolution.summary import short_summary
+    from bots.report.telegram import make_alerter
+
+    alerter = make_alerter(cfg)
+    alerter.alert(for_telegram(short_summary(result)), kind="report")
+    send = getattr(alerter, "send_file", None)
+    if send:
+        send(out, caption=f"Full evolution report {result.run_id}")
 
 
 def _start_dashboard(cfg, db_path) -> None:
@@ -165,11 +174,15 @@ def cmd_digest(cfg, conn, args) -> None:
 
 
 def cmd_backup(cfg, conn, args) -> None:
-    from bots.worker import backup_database
+    from bots.worker import backup_database, send_offsite_backup
 
     w = cfg["worker"]
-    print(backup_database(resolve_path(cfg["database_path"]), resolve_path(w["backups_dir"]),
-                          w["backups_keep"]))
+    db_path = resolve_path(cfg["database_path"])
+    print(backup_database(db_path, resolve_path(w["backups_dir"]), w["backups_keep"]))
+    if args.send:
+        from bots.report.telegram import make_alerter
+
+        print(send_offsite_backup(db_path, make_alerter(cfg)) or "no Telegram configured")
 
 
 def cmd_watchdog(cfg, conn, args) -> None:
@@ -234,7 +247,9 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--no-dashboard", action="store_true")
     sub.add_parser("dashboard", help="serve the dashboard only")
     sub.add_parser("report", help="print today's report")
-    sub.add_parser("backup", help="back up the database")
+    bk = sub.add_parser("backup", help="back up the database")
+    bk.add_argument("--send", action="store_true",
+                    help="also send a copy without price candles to your Telegram chat")
     dg = sub.add_parser("digest", help="AI analyst: write and send today's market briefing")
     dg.add_argument("--no-send", action="store_true", help="print only, no Telegram message")
     sub.add_parser("watchdog", help="alert if the worker has stopped reporting")

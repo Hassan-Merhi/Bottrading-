@@ -11,6 +11,10 @@ Fail-safes (section 6.7):
 """
 from __future__ import annotations
 
+import gzip
+import shutil
+import tempfile
+
 import signal
 import sqlite3
 import subprocess
@@ -29,10 +33,58 @@ from bots.live.exchange import (WithdrawalPermissionError, check_can_query, chec
                                 has_api_keys, make_live_exchange)
 from bots.paper.exchange import PaperExchange
 from bots.paper.trader import Trader, decide_graduation
-from bots.report.daily import daily_report_text
+from bots.report.daily import daily_report_text, account_rows
 from bots.report.telegram import make_alerter
 from bots.risk.guard import ReadOnlyExchange, RiskGuard
+from bots.risk.ledger import DAY_MS
 from bots.risk.state import CRASH_LOCK, HEARTBEAT, LAST_MODE, RUNNING, RiskState, now_ms
+
+
+# Tables worth keeping off the box. Candles are big and re-downloadable.
+EXPORT_SKIP = {"candles"}
+
+
+def export_state(db_path: Path, out_path: Path) -> Path:
+    """A gzip-compressed SQLite copy of everything except price candles."""
+    src = sqlite3.connect(str(db_path))
+    tmp = out_path.with_suffix(".db")
+    if tmp.exists():
+        tmp.unlink()
+    dst = sqlite3.connect(str(tmp))
+    try:
+        tables = src.execute("SELECT name, sql FROM sqlite_master WHERE type='table' "
+                             "AND name NOT LIKE 'sqlite_%'").fetchall()
+        for name, sql in tables:
+            if name in EXPORT_SKIP:
+                continue
+            dst.execute(sql)
+            rows = src.execute(f'SELECT * FROM "{name}"').fetchall()
+            if rows:
+                marks = ",".join("?" * len(rows[0]))
+                dst.executemany(f'INSERT INTO "{name}" VALUES ({marks})', rows)
+        dst.commit()
+    finally:
+        dst.close()
+        src.close()
+    with open(tmp, "rb") as fin, gzip.open(out_path, "wb") as fout:
+        shutil.copyfileobj(fin, fout)
+    tmp.unlink()
+    return out_path
+
+
+def send_offsite_backup(db_path: Path, alerter) -> str | None:
+    """Send the compressed state (no candles) to the owner's Telegram chat."""
+    send = getattr(alerter, "send_file", None)
+    if send is None:
+        return None
+    out = Path(tempfile.gettempdir()) / f"bots-state-{datetime.now(timezone.utc):%Y%m%d}.sqlite.gz"
+    export_state(db_path, out)
+    size_kb = out.stat().st_size / 1024
+    ok = send(out, caption=f"Nightly backup, {size_kb:.0f} KB. Bots, accounts, results and "
+                           "settings; price history is not included (it re-downloads). "
+                           "To restore: gunzip, then copy over bots.db in BOTS_STATE_DIR.")
+    out.unlink(missing_ok=True)
+    return f"sent {size_kb:.0f} KB" if ok else "send failed"
 
 
 def backup_database(db_path: Path, backups_dir: Path, keep: int) -> Path:
@@ -134,13 +186,47 @@ class Worker:
                  self._command)
         self._scheduled()
 
-    def _command(self, cmd: str) -> str:
+    HELP = ("Commands:\n/status - today's numbers\n/bots - every running bot\n"
+            "/digest - this morning's briefing\n/pause - stop opening new trades "
+            "(exits and stops keep working)\n/resume - allow new trades again\n"
+            "/kill confirm - close every live position, cancel orders, lock live mode")
+
+    def _command(self, text: str) -> str:
+        parts = text.strip().split()
+        cmd = parts[0].lower() if parts else ""
+        arg = " ".join(parts[1:]).lower()
         if cmd in ("/status", "/report"):
             return daily_report_text(self.conn, now_ms())
         if cmd == "/digest":
             row = latest_digest(self.conn)
             return for_telegram(row["text"]) if row else "No briefing yet today."
-        return "Commands: /status, /digest"
+        if cmd == "/bots":
+            return self._bots_text()
+        if cmd == "/pause":
+            self.guard.pause("Telegram")
+            return "Paused: no new trades until you send /resume. Open positions keep their stops."
+        if cmd == "/resume":
+            self.guard.resume("Telegram")
+            return "Resumed: new trades allowed again."
+        if cmd == "/kill":
+            if arg != "confirm":
+                return ("This closes every live position, cancels all orders and locks live "
+                        "mode until you run confirm-live. Send `/kill confirm` to do it.")
+            self.guard.kill("owner command via Telegram")
+            return "Kill switch pulled. Live positions closed, mode is PAPER."
+        return self.HELP
+
+    def _bots_text(self) -> str:
+        rows = account_rows(self.conn, "live") + account_rows(self.conn, "paper")
+        if not rows:
+            return "No bots running yet."
+        lines = []
+        for a in rows:
+            days = (now_ms() - a["started_at"]) / DAY_MS
+            lines.append(f"{a['bot_id']} [{a['mode']}] {a['pair']} {a['pnl'] / a['allocation']:+.1%} "
+                         f"over {days:.0f}d, {a['trades']} trades, "
+                         f"{'position open' if a['qty'] else 'flat'}, {a['status']}")
+        return for_telegram("\n".join(lines))
 
     def _due(self, name: str, hour: int) -> bool:
         now = datetime.now(timezone.utc)
@@ -167,6 +253,8 @@ class Worker:
         if self._due("backup", w["backup_hour_utc"]):
             try:
                 backup_database(self.db_path, resolve_path(w["backups_dir"]), w["backups_keep"])
+                if w.get("offsite_backup", True):
+                    send_offsite_backup(self.db_path, self.alerter)
             except Exception as e:  # noqa: BLE001
                 self.alerter.alert(f"Database backup failed: {e}", kind="risk")
         if needs_backfill(self.conn, self.cfg) and (

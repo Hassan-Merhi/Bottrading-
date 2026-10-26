@@ -263,3 +263,23 @@ def test_trailing_stop_and_time_exit_sell_through_the_guard(setup):
     trader.tick()
     reasons = [r[0] for r in conn.execute("SELECT reason FROM fills WHERE bot_id='b2' AND side='sell'")]
     assert reasons == ["time"]
+
+
+def test_owner_pause_blocks_new_entries_but_not_exits(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    guard.pause("test")
+    signals["entry"] = True
+    trader.tick()
+    assert guard.ledger.account("b1", "paper")["qty"] == 0
+    assert any("paused by the owner" in d for d in
+               (r[0] for r in conn.execute("SELECT detail FROM risk_events")))
+    guard.resume("test")
+    clock.t += H
+    trader.tick()
+    assert guard.ledger.account("b1", "paper")["qty"] > 0
+    guard.pause("test")
+    md.price = 48_000  # the hard stop still fires while paused
+    clock.t += H
+    trader.tick()
+    assert guard.ledger.account("b1", "paper")["qty"] == 0

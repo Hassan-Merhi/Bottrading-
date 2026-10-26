@@ -77,3 +77,55 @@ def test_backup_keeps_newest(tmp_path):
         import time
         time.sleep(1.05)
     assert len(list((tmp_path / "b").glob("bots-*.db"))) == 2
+
+
+def test_export_state_skips_candles_and_sends_offsite(tmp_path):
+    import gzip
+    from bots.db import connect
+    from bots.worker import export_state, send_offsite_backup
+    db = tmp_path / "x.db"
+    conn = connect(db)
+    conn.execute("INSERT INTO candles VALUES ('BTC/USD','15m',1,1,1,1,1,1)")
+    conn.execute("INSERT INTO meta VALUES ('k','v')")
+    conn.commit()
+    conn.close()
+    out = export_state(db, tmp_path / "state.sqlite.gz")
+    raw = gzip.open(out, "rb").read()
+    tmp = tmp_path / "restored.db"
+    tmp.write_bytes(raw)
+    restored = sqlite3.connect(tmp)
+    assert restored.execute("SELECT value FROM meta WHERE key='k'").fetchone()[0] == "v"
+    assert "candles" not in {r[0] for r in restored.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+
+    class FileAlerts(Alerts):
+        def __init__(self):
+            super().__init__()
+            self.files = []
+
+        def send_file(self, path, caption=""):
+            self.files.append((path.name, caption))
+            return True
+
+    a = FileAlerts()
+    assert send_offsite_backup(db, a).startswith("sent")
+    assert a.files and a.files[0][0].endswith(".sqlite.gz") and "restore" in a.files[0][1].lower()
+    assert send_offsite_backup(db, Alerts()) is None  # no file support: skipped quietly
+
+
+def test_telegram_commands_pause_resume_bots_and_kill(cfg, tmp_path):
+    from bots.risk.state import KILL_SWITCH, OWNER_PAUSE
+    from bots.tests.riskkit import add_bot
+    w, alerts = make_worker(cfg, tmp_path)
+    w.startup()
+    assert w._command("/bots") == "No bots running yet."
+    add_bot(w.conn, "b1", "paper")
+    w.loop_once()  # opens the paper account
+    text = w._command("/bots")
+    assert "b1 [paper] BTC/USD" in text and "flat" in text
+    assert "Paused" in w._command("/pause") and w.state.is_set(OWNER_PAUSE)
+    assert "Resumed" in w._command("/resume") and not w.state.is_set(OWNER_PAUSE)
+    assert "/kill confirm" in w._command("/kill") and not w.state.is_set(KILL_SWITCH)
+    assert "Kill switch" in w._command("/KILL confirm") and w.state.is_set(KILL_SWITCH)
+    assert "/pause" in w._command("/whatever")
+    w.shutdown()
