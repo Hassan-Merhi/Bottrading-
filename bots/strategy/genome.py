@@ -15,6 +15,7 @@ TIMEFRAMES = ("15m", "1h", "4h")
 ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd", "volume_spike",
                "squeeze_breakout")
 TREND_FILTERS = ("none", "own_daily", "btc_daily")
+STOP_MODES = ("fixed", "atr")  # fixed: stop_loss_pct below entry; atr: atr_mult x ATR(atr_period)
 
 # name -> (low, high, is_integer)
 NUMERIC_GENES: dict[str, tuple[float, float, bool]] = {
@@ -31,18 +32,21 @@ NUMERIC_GENES: dict[str, tuple[float, float, bool]] = {
     "trend_period": (20, 200, True),     # trend filter: days in the daily moving average
     "mood_min": (0, 90, True),           # Fear & Greed window for entries;
     "mood_max": (10, 100, True),         # 0..100 means the mood filter is off
+    "atr_period": (7, 30, True),         # candles in the Average True Range
+    "atr_mult": (1.0, 4.0, False),       # stop distance = atr_mult x ATR, when stop_mode is atr
 }
 CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
     "pair": PAIRS,
     "timeframe": TIMEFRAMES,
     "entry_type": ENTRY_TYPES,
     "trend_filter": TREND_FILTERS,
+    "stop_mode": STOP_MODES,
 }
 MIN_FAST_SLOW_GAP = 5
 MIN_MOOD_SPAN = 10
 # Values for genes added after the first release, so stored genomes still load.
 DEFAULTS = {"vol_mult": 2.0, "trend_period": 50, "mood_min": 0, "mood_max": 100,
-            "trend_filter": "none"}
+            "trend_filter": "none", "stop_mode": "fixed", "atr_period": 14, "atr_mult": 2.0}
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,9 @@ class Genome:
     mood_min: int = 0
     mood_max: int = 100
     trend_filter: str = "none"
+    stop_mode: str = "fixed"
+    atr_period: int = 14
+    atr_mult: float = 2.0
 
     @property
     def mood_filter_on(self) -> bool:
@@ -98,7 +105,12 @@ class Genome:
             filters += f"; only when {ref} > {self.trend_period}-day average"
         if self.mood_filter_on:
             filters += f"; only when Fear & Greed is {self.mood_min}-{self.mood_max}"
-        return (f"{self.pair} {self.timeframe} {rule}{filters}; stop {self.stop_loss_pct:.2f}%, "
+        if self.stop_mode == "atr":
+            lo, hi, _ = NUMERIC_GENES["stop_loss_pct"]
+            stop = f"stop {self.atr_mult:.1f}x ATR({self.atr_period}), {lo:g}-{hi:g}%"
+        else:
+            stop = f"stop {self.stop_loss_pct:.2f}%"
+        return (f"{self.pair} {self.timeframe} {rule}{filters}; {stop}, "
                 f"target {self.take_profit_pct:.2f}%, size {self.position_size_pct:.0f}%, "
                 f"max {self.max_trades_per_day}/day")
 
@@ -129,6 +141,7 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Gen
         "timeframe": rng.choice(tuple(timeframes)),
         "entry_type": rng.choice(ENTRY_TYPES),
         "trend_filter": rng.choice(TREND_FILTERS),
+        "stop_mode": rng.choice(STOP_MODES),
     }
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         v[name] = rng.randint(int(lo), int(hi)) if is_int else rng.uniform(lo, hi)
@@ -142,7 +155,7 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
     """Small random changes: numeric genes move by about ±scale of their value."""
     v = g.to_dict()
     options = {"pair": tuple(pairs), "timeframe": tuple(timeframes), "entry_type": ENTRY_TYPES,
-               "trend_filter": TREND_FILTERS}
+               "trend_filter": TREND_FILTERS, "stop_mode": STOP_MODES}
     for name in CATEGORICAL_GENES:
         if rng.random() < categorical_rate:
             v[name] = rng.choice(options[name])
@@ -161,10 +174,21 @@ def crossover(a: Genome, b: Genome, rng: random.Random) -> Genome:
     return repair({k: (da[k] if rng.random() < 0.5 else db[k]) for k in da})
 
 
+ATR_GENES = ("atr_period", "atr_mult")   # only meaningful when stop_mode is "atr"
+CATEGORICAL_WEIGHT = 2.0  # a different coin, timeframe, rule or stop type is a different bot
+
+
 def distance(a: Genome, b: Genome) -> float:
-    """0 = identical, 1 = nothing in common."""
+    """0 = identical, 1 = nothing in common.
+
+    Categorical genes count double, and the ATR genes are ignored while both
+    bots use a fixed stop, so unused genes cannot make two bots look alike.
+    """
     da, db = a.to_dict(), b.to_dict()
-    total = sum(da[k] != db[k] for k in CATEGORICAL_GENES)
-    for name, (lo, hi, _) in NUMERIC_GENES.items():
+    total = CATEGORICAL_WEIGHT * sum(da[k] != db[k] for k in CATEGORICAL_GENES)
+    numeric = [n for n in NUMERIC_GENES
+               if n not in ATR_GENES or "atr" in (a.stop_mode, b.stop_mode)]
+    for name in numeric:
+        lo, hi, _ = NUMERIC_GENES[name]
         total += abs(da[name] - db[name]) / (hi - lo)
-    return total / (len(CATEGORICAL_GENES) + len(NUMERIC_GENES))
+    return total / (CATEGORICAL_WEIGHT * len(CATEGORICAL_GENES) + len(numeric))

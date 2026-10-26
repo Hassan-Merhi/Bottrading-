@@ -118,6 +118,14 @@ CREATE TABLE IF NOT EXISTS accounts (     -- one per bot per mode; live accounts
     closed_at INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS equity_history (   -- one mark per account per UTC day, for charts
+    account_id INTEGER NOT NULL,
+    day INTEGER NOT NULL,             -- UTC day number
+    ts INTEGER NOT NULL,              -- ms of the latest mark that day
+    equity REAL NOT NULL,
+    PRIMARY KEY (account_id, day)
+);
+
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL,

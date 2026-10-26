@@ -97,6 +97,7 @@ def test_population_size_is_constant_and_newcomers_arrive(conn, cfg, synthetic_m
 
 def test_test_set_is_used_once_per_genome(conn, cfg, synthetic_market, monkeypatch):
     cfg = small_cfg(cfg)
+    cfg["evolution"]["gate"]["every_window_profitable"] = False  # the gate has its own test
     run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
     run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg, run.ctx)
     test_calls = []
@@ -152,3 +153,39 @@ def test_market_regime_on_intraday_candles():
     for c, want in ((up, "uptrend"), (down, "downtrend"), (flat, "sideways")):
         s = make_series(c, c, c, c, timeframe="15m")
         assert market_regime(s, 0, n)[0] == want
+
+
+def test_gate_holds_back_bots_that_lost_in_a_train_window(conn, cfg, synthetic_market, monkeypatch):
+    cfg = small_cfg(cfg)
+    run = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
+    run._serial_evaluator = runner_mod.Evaluator(run.market, run.windows_ms, cfg, run.ctx)
+    pop = []
+    run._fill(pop, 10, run._newcomer)  # the finalist pool is the top 20%: two bots
+    bots = sorted(run._evaluate(pop, None), key=lambda b: b.fitness, reverse=True)
+    # Make every bot profitable in every train window except the first bot's window 2.
+    for b in bots:
+        for w in b.evaluation.windows:
+            w["total_return"] = 0.05
+    bots[0].evaluation.windows[1]["total_return"] = -0.01
+    assert run._train_gate(bots[0]) == ["lost money in train window 2 of 3"]
+    assert run._train_gate(bots[1]) == []
+    real = run._evaluate_period
+    tested = []
+
+    def spy(g, period):
+        m = dict(real(g, period), total_return=0.02, n_trades=10, max_drawdown=0.05)
+        if period == run.splits.test:
+            tested.append(g)
+        return m
+
+    monkeypatch.setattr(run, "_evaluate_period", spy)
+    from bots.evolution.runner import RunResult
+    result = RunResult("x", "s", run.splits)
+    finalists = run._final_checks(bots, result)
+    assert bots[0].genome not in tested and result.gate_rejected == 1
+    assert finalists and all(f.passed_test and f.reasons == [] for f in finalists)
+    # The unseen-data verdict names every rule it failed.
+    reasons = run._test_verdict({"total_return": -0.1, "n_trades": 2, "max_drawdown": 0.4})
+    assert reasons == ["lost money on unseen data", "only 2 trades on unseen data (need 5)",
+                       "drawdown 40% on unseen data (limit 25%)"]
+    assert run._test_verdict({"total_return": 0.1, "n_trades": 5, "max_drawdown": 0.2}) == []

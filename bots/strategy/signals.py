@@ -13,7 +13,7 @@ import pandas as pd
 from bots.data.loader import Series
 from bots.strategy import indicators as ind
 from bots.strategy.context import MarketContext, mood_values, trend_mask
-from bots.strategy.genome import Genome
+from bots.strategy.genome import NUMERIC_GENES, Genome
 
 RSI_PERIOD = 14
 MACD_SIGNAL = 9
@@ -80,6 +80,31 @@ def compute_signals(s: Series, g: Genome, ctx: MarketContext | None = None
     return entry, exit_
 
 
+def stop_fractions(s: Series, g: Genome, atr: np.ndarray | None = None) -> np.ndarray | None:
+    """Per-candle stop distance as a fraction of price, or None for a fixed stop.
+
+    In ATR mode the stop sits atr_mult x ATR(atr_period) below the entry, computed
+    at the signal candle's close, and clipped into the fixed stop's allowed range
+    so one trade can never risk more than the widest fixed stop. Candles where
+    the ATR is not settled yet fall back to the genome's fixed stop.
+    """
+    if g.stop_mode != "atr":
+        return None
+    if atr is None:
+        atr = ind.atr(s.high, s.low, s.close, g.atr_period)
+    lo, hi, _ = NUMERIC_GENES["stop_loss_pct"]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        frac = g.atr_mult * atr / s.close
+    frac = np.where(np.isfinite(frac), np.clip(frac, lo / 100, hi / 100), g.stop_loss_pct / 100)
+    return frac
+
+
+def stop_pct_now(s: Series, g: Genome) -> float:
+    """The stop distance in percent for an entry signalled on the latest candle."""
+    frac = stop_fractions(s, g)
+    return g.stop_loss_pct if frac is None else float(frac[-1] * 100)
+
+
 def signal_key(g: Genome) -> tuple:
     """Only the genes that change the signals."""
     base = (g.pair, g.timeframe, g.entry_type,
@@ -105,6 +130,7 @@ class SignalCache:
         self.ctx = ctx
         self.max_size = max_size
         self._cache: OrderedDict[tuple, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._atr: OrderedDict[tuple, np.ndarray] = OrderedDict()
 
     def get(self, g: Genome) -> tuple[Series, np.ndarray, np.ndarray]:
         s = self.market[(g.pair, g.timeframe)]
@@ -119,3 +145,17 @@ class SignalCache:
         else:
             self._cache.move_to_end(key)
         return s, hit[0], hit[1]
+
+    def stops(self, g: Genome) -> np.ndarray | None:
+        """Per-candle stop fractions for ATR-mode genomes (None for fixed stops)."""
+        if g.stop_mode != "atr":
+            return None
+        s = self.market[(g.pair, g.timeframe)]
+        key = (g.pair, g.timeframe, g.atr_period)
+        atr = self._atr.get(key)
+        if atr is None:
+            atr = ind.atr(s.high, s.low, s.close, g.atr_period)
+            self._atr[key] = atr
+            if len(self._atr) > 256:
+                self._atr.popitem(last=False)
+        return stop_fractions(s, g, atr)

@@ -120,6 +120,8 @@ white-space:nowrap;background:var(--panel);border:1px solid var(--line);color:va
 .stats div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
 .stats b{display:block;font-size:15px;font-variant-numeric:tabular-nums}
 .stats span{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.spark{margin:8px 0 2px}.spark svg{width:100%;height:56px;display:block}
+.spark .lbl{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em}
 .gate{font-size:12.5px}.gate .row{display:flex;align-items:center;gap:8px;padding:3px 0}
 .gate .row span:first-child{flex:0 0 118px;color:var(--ink-2)}
 .gate .track{flex:1;height:7px;border-radius:4px;background:var(--line);overflow:hidden}
@@ -455,6 +457,41 @@ def _gate_progress(a: dict, cfg: dict, price: float | None, now: int) -> str:
     return '<div class="gate"><div class="title">Graduation progress</div>' + "".join(rows) + "</div>"
 
 
+def _sparkline(conn, a: dict, now: int) -> str:
+    """Equity over the last 90 days as a small line, with the starting stake as a baseline."""
+    rows = conn.execute("SELECT day, equity FROM equity_history WHERE account_id=? "
+                        "ORDER BY day DESC LIMIT 90", (a["account_id"],)).fetchall()
+    pts = [(int(r["day"]), float(r["equity"])) for r in reversed(rows)]
+    today = now // DAY_MS
+    if not pts or pts[-1][0] != today:
+        pts.append((today, float(a["last_equity"])))
+    if len(pts) < 2:
+        return ('<div class="spark"><span class="lbl">Equity over time</span>'
+                '<p class="muted" style="margin:2px 0 0;font-size:12.5px">Chart appears after '
+                'the first full day.</p></div>')
+    W, H, P = 300, 56, 4
+    base = float(a["allocation"])
+    ys = [e for _, e in pts] + [base]
+    lo, hi = min(ys), max(ys)
+    span = (hi - lo) or 1.0
+    x0, x1 = pts[0][0], pts[-1][0]
+    xspan = (x1 - x0) or 1
+
+    def xy(d, e):
+        return P + (d - x0) / xspan * (W - 2 * P), P + (hi - e) / span * (H - 2 * P)
+
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in (xy(d, e) for d, e in pts))
+    by = xy(x0, base)[1]
+    colour = "var(--good)" if pts[-1][1] >= base else "var(--bad)"
+    days = x1 - x0
+    return (f'<div class="spark"><span class="lbl">Equity, last {days} day{"s" if days != 1 else ""}'
+            f'</span><svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" '
+            f'aria-label="Equity over time"><line x1="{P}" x2="{W - P}" y1="{by:.1f}" y2="{by:.1f}" '
+            f'stroke="var(--ink-3)" stroke-dasharray="3 3"/><polyline points="{line}" fill="none" '
+            f'stroke="{colour}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>'
+            f'</svg></div>')
+
+
 def _bot_card(a: dict, cfg: dict, conn, now: int, mode: str, extra: str = "") -> str:
     g = Genome.from_dict(json.loads(a["genome_json"]))
     status = a["status"]
@@ -476,9 +513,10 @@ def _bot_card(a: dict, cfg: dict, conn, now: int, mode: str, extra: str = "") ->
     gate = ""
     if mode == "paper" and status == "paper":
         gate = _gate_progress(a, cfg, _latest_price(conn, g.pair, cfg["data"]["base_timeframe"]), now)
+    spark = _sparkline(conn, a, now) if a.get("account_id") is not None else ""
     return (f'<div class="bot"><div class="head"><span class="id">{escape(a["bot_id"])}</span>'
             f'{pos_badge}<span class="badge {badge[0]}">{badge[1]}</span></div>'
-            f'<div class="strategy">{escape(g.describe())}</div>{stats}{meta}{gate}{extra}</div>')
+            f'<div class="strategy">{escape(g.describe())}</div>{stats}{meta}{spark}{gate}{extra}</div>')
 
 
 def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
@@ -576,7 +614,8 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
          f'bots per generation, {gens_done} generations in the last run, {graves} retired to the '
          'graveyard so far' if run else 'bots per generation. No run finished yet.'),
         ("", "2 · Unseen-data test", f'{cand.get("awaiting_paper", 0) + cand.get("deployed", 0)}',
-         f'passed ({cand.get("test_failed", 0)} failed). Passed bots wait for a paper slot.'),
+         f'passed ({cand.get("test_failed", 0)} failed). Only bots that made money in every '
+         'training window get this one-time check; passed bots wait for a paper slot.'),
         ("", "3 · Paper trading", f'{counts.get("paper", 0)} / {cfg["paper"]["max_bots"]}',
          f'slots in use. Needs {cfg["graduation"]["min_paper_days"]}+ days, '
          f'{cfg["graduation"]["min_paper_trades"]}+ trades, profit, low drawdown.'),
@@ -749,6 +788,9 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
         '<div><b>Graduation</b>A paper bot asks for your approval after 30+ days, 20+ trades, profit '
         'after fees, drawdown under 10%, and beating "just hold the coin".</div>'
         '<div><b>Drawdown</b>The worst drop from a bot\'s peak equity. Smaller is safer.</div>'
+        '<div><b>ATR stop</b>Some bots place their stop a multiple of the recent average candle '
+        'range (ATR) below entry, so it widens in wild markets and tightens in calm ones. It is '
+        'always kept within the fixed stop\'s 0.5–5% range.</div>'
         '<div><b>Protected funds</b>When a live bot doubles its money, its original stake is locked '
         'and never traded again.</div>'
         '<div><b>Kill switch</b>If total live losses hit the limit, everything is closed and live '

@@ -48,3 +48,16 @@ def crosses_above(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def crosses_below(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return crosses_above(b, a)
+
+
+def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Wilder's Average True Range. The first `period` values are NaN.
+
+    True range at i uses candle i and the close of i - 1, so the value at i is
+    known at the close of candle i and never looks ahead.
+    """
+    prev_close = np.roll(close, 1)
+    prev_close[0] = np.nan
+    tr = np.maximum.reduce([high - low, np.abs(high - prev_close), np.abs(low - prev_close)])
+    tr[0] = high[0] - low[0]
+    return pd.Series(tr).ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean().to_numpy()

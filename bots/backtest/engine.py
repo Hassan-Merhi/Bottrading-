@@ -4,7 +4,9 @@ Rules that keep it honest:
 
 * No look-ahead. A signal at candle i (computed at its close) fills at the
   open of candle i + 1.
-* Every trade has a stop-loss and a take-profit. Both are checked inside
+* Every trade has a stop-loss and a take-profit. The stop is a fixed percent
+  or, for ATR-mode genomes, a per-candle distance decided at the signal candle
+  (`stop_pct`). Both are checked inside
   each candle using its low and high. If both could have hit in the same
   candle, the stop is assumed to have hit first. A stop gapped through at the
   open fills at the open, not at the stop price.
@@ -73,10 +75,13 @@ def _first_true(mask: np.ndarray) -> int:
 
 
 def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
-                 start: int, end: int, cost: CostModel) -> Result:
+                 start: int, end: int, cost: CostModel,
+                 stop_pct: np.ndarray | None = None) -> Result:
     """Simulate genome `g` on candles [start, end) of `s`.
 
     `entries` / `exits` are sorted candle indices where the signal fired.
+    `stop_pct`, when given, is the stop distance (fraction of price) to use for a
+    trade signalled at candle i; it is read at the signal candle, never later.
     """
     end = min(end, len(s))
     n = max(end - start, 0)
@@ -120,7 +125,8 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
         equity[filled_to - start:j - start] = cash
         cash_before = cash
         cash -= notional + fee_in
-        stop, target = fill * (1 - sl), fill * (1 + tp)
+        sl_i = float(stop_pct[i]) if stop_pct is not None else sl
+        stop, target = fill * (1 - sl_i), fill * (1 + tp)
 
         e = int(np.searchsorted(exits, j))
         sig = int(exits[e]) if e < len(exits) else None

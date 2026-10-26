@@ -119,6 +119,9 @@ class Ledger:
                               "WHERE account_id=?", (day, eq, account_id))
         self.conn.execute("UPDATE accounts SET last_equity=?, peak_equity=?, max_drawdown=? "
                           "WHERE account_id=?", (eq, peak, dd, account_id))
+        self.conn.execute("INSERT INTO equity_history (account_id, day, ts, equity) "
+                          "VALUES (?,?,?,?) ON CONFLICT(account_id, day) DO UPDATE SET "
+                          "ts=excluded.ts, equity=excluded.equity", (account_id, day, now, eq))
         self.conn.commit()
         return self.by_id(account_id)
 

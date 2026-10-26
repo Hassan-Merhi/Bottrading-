@@ -46,15 +46,22 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
         lines += ["", f"Best bot in the final generation: {gens[-1]['best_genome']}"]
 
     lines += ["", "## Finalists (validation → one-time test)", ""]
+    lines.append(f"Gate: a bot must have made money in every walk-forward train window on its "
+                 f"own ({result.falling_windows} of those windows were falling markets, where "
+                 f"holding the coin lost money). {result.gate_rejected} top bots were held back "
+                 "by that rule and kept their one-time test for a later run.")
+    lines.append("")
     if not result.finalists:
-        lines.append("No bot was profitable on validation data, so none was sent to the test "
-                     "set. Nothing graduates from this run.")
+        lines.append("No bot passed the gate and was profitable on validation data, so none was "
+                     "sent to the test set. Nothing graduates from this run.")
     else:
         lines += ["| strategy | val return | val hold | test return | test hold | test trades | "
                   "test max DD | result |",
                   "|---|---:|---:|---:|---:|---:|---:|---|"]
         for f in result.finalists:
             verdict = "passed → paper trading" if f.passed_test else "failed → retired"
+            if f.reasons:
+                verdict += " (" + "; ".join(f.reasons) + ")"
             if f.previously_tested:
                 verdict += " (test result from an earlier run)"
             lines.append(

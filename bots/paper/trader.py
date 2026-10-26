@@ -28,7 +28,7 @@ from bots.risk.state import HEARTBEAT
 from bots.data.mood import load_fear_greed
 from bots.strategy.context import MarketContext
 from bots.strategy.genome import Genome
-from bots.strategy.signals import compute_signals
+from bots.strategy.signals import compute_signals, stop_pct_now
 
 PAPER_STATUSES = ("paper", "ready_to_graduate", "approved")
 
@@ -255,7 +255,7 @@ class Trader:
             report.exits += 1
         elif acc["qty"] == 0 and entry[-1] and acc["trades_today"] < g.max_trades_per_day:
             self.guard.enter_long(bot["bot_id"], mode, g.pair, price, g.position_size_pct,
-                                  g.stop_loss_pct, g.take_profit_pct, f"{g.entry_type} entry")
+                                  stop_pct_now(s, g), g.take_profit_pct, f"{g.entry_type} entry")
             report.entries += 1
         self.guard.ledger.mark(acc["account_id"], price, self.clock())
 
