@@ -157,3 +157,17 @@ def test_random_strategies_have_no_edge_on_a_random_walk():
         rets.append(run(s, np.flatnonzero(r2.random(n) < 0.02), np.flatnonzero(r2.random(n) < 0.02),
                         base_genome(stop_loss_pct=2, take_profit_pct=4)).metrics["total_return"])
     assert np.mean(rets) < 0
+
+
+def test_per_candle_stop_is_read_at_the_signal_candle():
+    o, h, l, c = flat(12)
+    l[5] = 97.5  # a 2% dip after entry at candle 4
+    s = make_series(o, h, l, c)
+    g = base_genome(stop_loss_pct=5.0, take_profit_pct=15)
+    stops = np.full(12, 0.05)
+    stops[3] = 0.01  # the signal candle says: tight stop for this trade
+    stops[4] = 0.05  # the fill candle's value must be ignored
+    r = run_backtest(s, np.array([3]), np.array([], dtype=int), g, 0, 12, COST, stops)
+    assert r.trades[0].reason == "stop" and r.trades[0].exit_idx == 5
+    fixed = run(s, [3], [], g)
+    assert fixed.trades[0].reason == "end"  # the 5% fixed stop survives the dip

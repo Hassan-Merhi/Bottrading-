@@ -120,3 +120,41 @@ def test_signal_cache_reuses_results():
     _, e1, _ = cache.get(g1)
     _, e2, _ = cache.get(g2)
     assert e1 is e2
+
+
+def test_atr_is_causal_and_positive():
+    rng = np.random.default_rng(0)
+    c = 100 + np.cumsum(rng.normal(0, 1, 300))
+    h, l = c + rng.uniform(0.1, 1.0, 300), c - rng.uniform(0.1, 1.0, 300)
+    a = ind.atr(h, l, c, 14)
+    assert np.isnan(a[:13]).all() and np.isfinite(a[14:]).all() and (a[14:] > 0).all()
+    h2, l2, c2 = h.copy(), l.copy(), c.copy()
+    h2[200:] += 50  # the future changes; values before it must not
+    np.testing.assert_array_equal(a[:200], ind.atr(h2, l2, c2, 14)[:200])
+
+
+def test_atr_stop_is_clipped_into_the_fixed_stop_range():
+    from bots.strategy.signals import stop_fractions, stop_pct_now
+    o, h, l, c = (np.full(100, 100.0) for _ in range(4))
+    h, l = h + 0.1, l - 0.1  # a calm market: ATR 0.2 -> 2x = 0.4%, below the 0.5% floor
+    s = make_series(o, h, l, c)
+    g = base_genome(stop_mode="atr", atr_period=14, atr_mult=2.0, stop_loss_pct=3.0)
+    frac = stop_fractions(s, g)
+    assert frac[:13] == pytest.approx(0.03)  # unsettled ATR falls back to the fixed stop
+    assert frac[50:] == pytest.approx(0.005)
+    assert stop_pct_now(s, g) == pytest.approx(0.5)
+    wild = make_series(o, h + 30, l - 30, c)  # ATR 60 -> 120%, capped at 5%
+    assert stop_fractions(wild, g)[-1] == pytest.approx(0.05)
+    assert stop_fractions(s, base_genome()) is None
+    assert "ATR(14)" in g.describe() and "ATR" not in base_genome().describe()
+
+
+def test_signal_cache_serves_stops():
+    rng = np.random.default_rng(1)
+    c = 100 + np.cumsum(rng.normal(0, 1, 200))
+    s = make_series(c, c + 1, c - 1, c)
+    cache = SignalCache({("BTC/USD", "1h"): s})
+    g = base_genome(stop_mode="atr", atr_mult=3.0)
+    a = cache.stops(g)
+    assert a is not None and len(a) == 200 and cache.stops(base_genome()) is None
+    np.testing.assert_array_equal(a, cache.stops(g))

@@ -65,9 +65,25 @@ same backtest, unseen-data check and 30-day paper gate as any other rule.
   average on a green candle making a new short-term high) and volatility
   squeeze breakout (Bollinger band width in its lowest 20%, then a close above
   the upper band).
+- **Volatility-sized stops:** a bot's stop is either a fixed percent or
+  `atr_mult` × ATR(`atr_period`) below entry, decided at the signal candle, so it
+  widens in wild markets and tightens in calm ones. The ATR stop is always
+  clipped into the fixed stop's 0.5–5% range, so one trade never risks more
+  than the widest fixed stop. Paper and live entries use the same number.
 
 All of these only look at days that have fully closed, so a backtest never
 sees the future (tests check this).
+
+## The gate before paper trading
+
+Evolution scores every bot on walk-forward windows of the training period.
+Before a top bot may spend its one-time check on the unseen test period it must
+have made money in **every** training window on its own (`evolution.gate`), so
+a bot that only worked in one lucky stretch never reaches paper trading. The
+test check itself passes only with a profit, at least `min_test_trades` trades
+and a drawdown under `max_test_drawdown_pct`; the run report names the rule a
+finalist failed. Each bot's daily equity is kept in `equity_history`, which the
+dashboard draws as a small chart on every bot card.
 
 ## AI analyst (information only)
 

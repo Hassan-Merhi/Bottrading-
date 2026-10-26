@@ -84,12 +84,13 @@ class Evaluator:
 
     def evaluate(self, g: Genome) -> Evaluation:
         s, entries, exits = self.cache.get(g)
+        stops = self.cache.stops(g)
         cost = CostModel.from_config(self.cfg["backtest"], g.pair)
         windows = []
         bounds = []
         for start_ms, end_ms in self.windows_ms:
             a, b = s.index_of(start_ms), s.index_of(end_ms)
-            windows.append(run_backtest(s, entries, exits, g, a, b, cost).metrics)
+            windows.append(run_backtest(s, entries, exits, g, a, b, cost, stops).metrics)
             bounds.append((a, b))
         worst = int(np.argmin([w["total_return"] for w in windows]))
         regime, vol = market_regime(s, *bounds[worst])

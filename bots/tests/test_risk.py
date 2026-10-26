@@ -461,3 +461,17 @@ def test_demoted_live_bot_returns_to_paper_without_more_money(cfg, conn, tmp_pat
     guard.demote("b1", "broke its limits")
     assert guard.ledger.account("b1", "live") is None
     assert conn.execute("SELECT status FROM deployed_bots").fetchone()[0] == "paper"
+
+
+def test_mark_keeps_one_equity_snapshot_per_day(conn):
+    from bots.risk.ledger import DAY_MS, Ledger
+    ledger = Ledger(conn)
+    ledger.open_account("b1", "paper", 20.0, 1, 0, None)
+    acc = ledger.account("b1", "paper")
+    ledger.mark(acc["account_id"], None, 1_000)
+    ledger.mark(acc["account_id"], None, 2_000)            # same day: overwrites
+    ledger.mark(acc["account_id"], None, DAY_MS + 5_000)   # next day: new row
+    rows = conn.execute("SELECT day, ts, equity FROM equity_history WHERE account_id=? "
+                        "ORDER BY day", (acc["account_id"],)).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(0, 2_000), (1, DAY_MS + 5_000)]
+    assert all(r[2] == 20.0 for r in rows)

@@ -64,6 +64,7 @@ class Finalist:
     test: dict
     passed_test: bool
     previously_tested: bool
+    reasons: list[str] = field(default_factory=list)   # why the test check failed, if it did
 
 
 @dataclass
@@ -74,6 +75,8 @@ class RunResult:
     generations: list[dict] = field(default_factory=list)
     finalists: list[Finalist] = field(default_factory=list)
     deaths: int = 0
+    gate_rejected: int = 0       # top bots kept from the test because a train window lost money
+    falling_windows: int = 0     # train windows where simply holding the coin lost money
 
 
 class EvolutionRun:
@@ -188,7 +191,7 @@ class EvolutionRun:
                 population = self._next_generation(gen, bots, result,
                                                    last=gen == self.ecfg["generations"] - 1)
             self._save_population(bots)
-            result.finalists = self._final_checks(bots)
+            result.finalists = self._final_checks(bots, result)
         finally:
             if pool is not None:
                 pool.shutdown()
@@ -255,27 +258,68 @@ class EvolutionRun:
     def _evaluate_period(self, g: Genome, period: tuple[int, int]) -> dict:
         s = self.market[(g.pair, g.timeframe)]
         _, entries, exits = self._serial_evaluator.cache.get(g)
+        stops = self._serial_evaluator.cache.stops(g)
         cost = CostModel.from_config(self.cfg["backtest"], g.pair)
         return run_backtest(s, entries, exits, g, s.index_of(period[0]), s.index_of(period[1]),
-                            cost).metrics
+                            cost, stops).metrics
 
-    def _final_checks(self, bots: list[Bot]) -> list[Finalist]:
-        pool = [b.genome for b in bots[: max(1, int(len(bots) * 0.2))]]
+    def _train_gate(self, bot: Bot) -> list[str]:
+        """Why a top bot may not spend its test check: a train window that lost money."""
+        gate = self.ecfg.get("gate") or {}
+        if not gate.get("every_window_profitable", False):
+            return []
+        losing = [i for i, w in enumerate(bot.evaluation.windows) if w["total_return"] <= 0]
+        if not losing:
+            return []
+        return [f"lost money in train window {', '.join(str(i + 1) for i in losing)} "
+                f"of {len(bot.evaluation.windows)}"]
+
+    def _test_verdict(self, test: dict) -> list[str]:
+        """Why the one-time unseen-data check failed; empty means it passed."""
+        gate = self.ecfg.get("gate") or {}
+        reasons = []
+        if test["total_return"] <= 0:
+            reasons.append("lost money on unseen data")
+        if test["n_trades"] < gate.get("min_test_trades", 0):
+            reasons.append(f"only {test['n_trades']} trades on unseen data "
+                           f"(need {gate['min_test_trades']})")
+        dd_limit = gate.get("max_test_drawdown_pct")
+        if dd_limit is not None and test["max_drawdown"] > dd_limit / 100:
+            reasons.append(f"drawdown {test['max_drawdown']:.0%} on unseen data "
+                           f"(limit {dd_limit}%)")
+        return reasons
+
+    def _final_checks(self, bots: list[Bot], result: RunResult | None = None) -> list[Finalist]:
+        pool = bots[: max(1, int(len(bots) * 0.2))]
         scored = []
-        for g in pool:
+        rejected = 0
+        for b in pool:
+            if self._train_gate(b):
+                rejected += 1
+                continue
+            g = b.genome
             val = self._evaluate_period(g, self.splits.validation)
             scored.append((score_windows([val], self.cfg["fitness"]), g, val))
         scored.sort(key=lambda t: t[0], reverse=True)
         chosen = [t for t in scored if t[2]["total_return"] > 0][: self.ecfg["finalists"]]
+        if result is not None:
+            result.gate_rejected = rejected
+            if bots:
+                result.falling_windows = sum(
+                    w["hold_return"] < 0 for w in bots[0].evaluation.windows)
         finalists = []
         for vfit, g, val in chosen:
             row = self.conn.execute("SELECT test_json, passed_test FROM candidates "
                                     "WHERE genome_hash=?", (g.hash(),)).fetchone()
             if row is not None:
-                finalists.append(Finalist(g, vfit, val, json.loads(row[0]), bool(row[1]), True))
+                test = json.loads(row[0])
+                finalists.append(Finalist(g, vfit, val, test, bool(row[1]), True,
+                                          list(test.get("gate_failures", []))))
                 continue
             test = self._evaluate_period(g, self.splits.test)
-            passed = test["total_return"] > 0
+            reasons = self._test_verdict(test)
+            test["gate_failures"] = reasons
+            passed = not reasons
             self.conn.execute(
                 "INSERT INTO candidates (genome_hash, run_id, genome_json, validation_fitness, "
                 "validation_json, test_json, passed_test, stage, created_at) "
@@ -284,6 +328,6 @@ class EvolutionRun:
                  int(passed), "awaiting_paper" if passed else "test_failed",
                  datetime.now(timezone.utc).isoformat()),
             )
-            finalists.append(Finalist(g, vfit, val, test, passed, False))
+            finalists.append(Finalist(g, vfit, val, test, passed, False, reasons))
         self.conn.commit()
         return finalists

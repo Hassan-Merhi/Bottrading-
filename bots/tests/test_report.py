@@ -124,3 +124,17 @@ def test_dashboard_shows_mood_and_briefing(dash):
     assert "Market mood and AI analyst" in page and "<b>23</b>/100" in page
     assert "Mood: &lt;b&gt;fearful&lt;/b&gt;" in page  # untrusted text is escaped
     assert "never read it" in page
+
+
+def test_dashboard_draws_equity_history(dash):
+    client, db = dash
+    conn = connect(db)
+    add_bot(conn, "b2", "paper")
+    conn.execute("INSERT INTO accounts (bot_id, mode, active, epoch, allocation, cash, peak_equity, "
+                 "last_equity, day_start_equity, started_at) VALUES ('b2','paper',1,1,20,21,21,21,21,0)")
+    acc = conn.execute("SELECT account_id FROM accounts WHERE bot_id='b2'").fetchone()[0]
+    conn.executemany("INSERT INTO equity_history (account_id, day, ts, equity) VALUES (?,?,?,?)",
+                     [(acc, d, d * 86_400_000, 20 + d * 0.1) for d in range(5)])
+    conn.commit()
+    page = client.get("/").text
+    assert "Equity, last" in page and "<polyline" in page

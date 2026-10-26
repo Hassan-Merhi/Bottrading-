@@ -52,6 +52,13 @@ evolution:
   finalists: 5                           # candidates that get the one-time test-set check
   workers: 0                             # 0 = use all CPU cores
   seed: null
+  # What a finalist must show before it spends its one-time unseen-data check
+  # and before that check counts as passed. Stricter = fewer lucky bots reach
+  # paper trading and waste 30 days there.
+  gate:
+    every_window_profitable: true        # profitable in each walk-forward train window on its own
+    min_test_trades: 5                   # the unseen-data test must contain at least this many trades
+    max_test_drawdown_pct: 25            # and stay under this drawdown
 
 fitness:
   metric: sharpe                         # sharpe | calmar
@@ -63,7 +70,7 @@ fitness:
   consistency_weight: 0.5                # fitness = mean(window scores) - w * std(window scores)
 
 graveyard:
-  similarity_radius: 0.055               # genome distance (0–1) counted as "too similar"
+  similarity_radius: 0.04                # genome distance (0–1) counted as "too similar"
   saturation: 5                          # this many similar deaths of one cause = full penalty
   penalty: 0.5                           # max fitness penalty
 
