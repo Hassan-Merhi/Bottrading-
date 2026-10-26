@@ -171,3 +171,39 @@ def test_per_candle_stop_is_read_at_the_signal_candle():
     assert r.trades[0].reason == "stop" and r.trades[0].exit_idx == 5
     fixed = run(s, [3], [], g)
     assert fixed.trades[0].reason == "end"  # the 5% fixed stop survives the dip
+
+
+def test_trailing_stop_follows_prior_highs_and_locks_profit():
+    o, h, l, c = flat(12)
+    for k, (op, hi, lo) in {5: (108, 110, 108), 6: (110, 112, 110), 7: (110, 112, 109.5),
+                            8: (108, 108, 105)}.items():  # a run-up, then a dip
+        o[k], h[k], l[k], c[k] = op, hi, lo, op
+    # Entry fills at candle 4. The trail sits 3% under the prior high: 108.64 after
+    # candle 6's 112. Candle 7's low (109.5) survives it; candle 8's low (105) does not.
+    s = make_series(o, h, l, c)
+    g = base_genome(stop_loss_pct=5.0, take_profit_pct=50, trail_pct=3.0)
+    r = run(s, [3], [], g)
+    t = r.trades[0]
+    assert t.reason == "trail" and t.exit_idx == 8
+    assert t.exit_price == pytest.approx(min(112.0 * 0.97, o[8]) * (1 - SLIP))
+    assert t.pnl > 0 and r.metrics["trail_outs"] == 1 and r.metrics["stop_outs"] == 0
+    # A high inside the same candle as the dip must not raise the stop for that candle.
+    h2, l2 = h.copy(), l.copy()
+    h2[8], l2[8] = 130.0, 105.0
+    assert run(make_series(o, h2, l2, c), [3], [], g).trades[0].exit_idx == 8
+
+
+def test_time_exit_fills_at_the_open_after_max_hold_candles():
+    o, h, l, c = flat(12)
+    o[7] = 103.0
+    s = make_series(o, h, l, c)
+    g = base_genome(stop_loss_pct=5.0, take_profit_pct=50, max_hold_candles=3)
+    r = run(s, [3], [], g)  # entry fills at candle 4, time exit at candle 7's open
+    t = r.trades[0]
+    assert t.reason == "time" and t.exit_idx == 7
+    assert t.exit_price == pytest.approx(103.0 * (1 - SLIP)) and r.metrics["time_outs"] == 1
+    # A stop inside the holding period still wins.
+    l[5] = 90.0
+    assert run(make_series(o, h, l, c), [3], [], g).trades[0].reason == "stop"
+    # Off by default.
+    assert "exit after" not in base_genome().describe() and "exit after 3" in g.describe()

@@ -21,8 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from bots.config import PROJECT_DIR, resolve_path
-from bots.data.fetch import BACKFILL_DONE, make_exchange
-from bots.data.store import get_meta
+from bots.data.fetch import make_exchange, needs_backfill
 from bots.analyst.digest import for_telegram, latest_digest
 from bots.data.mood import update_fear_greed
 from bots.db import connect
@@ -170,7 +169,7 @@ class Worker:
                 backup_database(self.db_path, resolve_path(w["backups_dir"]), w["backups_keep"])
             except Exception as e:  # noqa: BLE001
                 self.alerter.alert(f"Database backup failed: {e}", kind="risk")
-        if not get_meta(self.conn, BACKFILL_DONE) and (
+        if needs_backfill(self.conn, self.cfg) and (
                 self._backfill is None or
                 (self._backfill.poll() is not None and time.time() - self._backfill_at > 3600)):
             # History backfill takes hours and resumes where it stopped; retried hourly if it fails.

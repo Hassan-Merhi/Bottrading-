@@ -72,9 +72,9 @@ class Ledger:
         cost = qty * price + fee
         self.conn.execute(
             "UPDATE accounts SET cash=cash-?, qty=?, entry_price=?, entry_cost=?, entry_ts=?, "
-            "stop_price=?, target_price=?, stop_order_id=NULL, fees=fees+?, "
+            "stop_price=?, target_price=?, stop_order_id=NULL, high_since_entry=?, fees=fees+?, "
             "trades_today=trades_today+1 WHERE account_id=?",
-            (cost, qty, price, cost, ts, stop, target, fee, acc["account_id"]),
+            (cost, qty, price, cost, ts, stop, target, price, fee, acc["account_id"]),
         )
         self._fill(acc, ts, "buy", qty, price, fee, None, reason, order_id)
 
@@ -97,10 +97,20 @@ class Ledger:
         if not left:
             self.conn.execute(
                 "UPDATE accounts SET entry_price=NULL, entry_ts=NULL, stop_price=NULL, "
-                "target_price=NULL, stop_order_id=NULL WHERE account_id=?", (acc["account_id"],))
+                "target_price=NULL, stop_order_id=NULL, high_since_entry=NULL "
+                "WHERE account_id=?", (acc["account_id"],))
         self._fill(acc, ts, "sell", qty, price, fee, pnl, reason, order_id)
         self._house_money(acc["account_id"])
         return pnl
+
+    def note_high(self, account_id: int, price: float) -> float:
+        """Remember the highest price seen while in a trade; returns the new high."""
+        acc = self.by_id(account_id)
+        high = max(acc["high_since_entry"] or acc["entry_price"] or price, price)
+        self.conn.execute("UPDATE accounts SET high_since_entry=? WHERE account_id=?",
+                          (high, account_id))
+        self.conn.commit()
+        return high
 
     def set_stop_order(self, account_id: int, order_id: str | None) -> None:
         self.conn.execute("UPDATE accounts SET stop_order_id=? WHERE account_id=?",

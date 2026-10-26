@@ -65,6 +65,11 @@ same backtest, unseen-data check and 30-day paper gate as any other rule.
   average on a green candle making a new short-term high) and volatility
   squeeze breakout (Bollinger band width in its lowest 20%, then a close above
   the upper band).
+- **Trailing stop and time exit:** `trail_pct` raises the stop to a fixed
+  distance under the highest price since entry (0 = off); `max_hold_candles`
+  closes a trade after that many candles (0 = off). In paper and live trading
+  both run in software on top of the hard stop resting on the exchange, and
+  every sale still goes through RiskGuard.
 - **Volatility-sized stops:** a bot's stop is either a fixed percent or
   `atr_mult` × ATR(`atr_period`) below entry, decided at the signal candle, so it
   widens in wild markets and tightens in calm ones. The ATR stop is always
@@ -153,8 +158,14 @@ no disk. Leave the Kraken keys unset while paper trading.
 
 ## Before trusting results
 
-- Verify `taker_fee_pct` and `min_order` in `bots/config.yaml` against Kraken's
-  current fee schedule and pair minimums. Live orders also use Kraken's
-  reported minimums, whichever is stricter.
+- `taker_fee_pct` is 0.80%: Kraken Pro's Tier 1 taker rate since 9 July 2026
+  (0.40% maker / 0.80% taker at $0+ 30-day volume). The bots use market
+  orders, so every fill pays the taker rate; a round trip costs about 1.7%
+  with slippage, which is why most strategies die. Re-check the fee schedule
+  occasionally and lower it only if your account really is in a higher tier.
+- `min_order` sizes are deliberately strict guesses. Live orders use the larger
+  of the config value and Kraken's reported minimum.
+- The pair whitelist is BTC, ETH, SOL, XRP, LINK, ADA and DOGE against USD.
+  Adding a pair later is safe: the worker downloads only the missing history.
 - `starting_balance_usd` / `paper.allocation_usd` are $20 (the live per-bot
   cap), so tiny positions get refused just like on the exchange.

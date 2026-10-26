@@ -9,7 +9,7 @@ database_path: bots/data/bots.db
 # ---------------------------------------------------------------------------
 data:
   exchange: kraken
-  pairs: [BTC/USD, ETH/USD, SOL/USD]      # liquid pairs whitelist
+  pairs: [BTC/USD, ETH/USD, SOL/USD, XRP/USD, LINK/USD, ADA/USD, DOGE/USD]  # liquid pairs whitelist
   timeframes: [15m, 1h, 4h]
   base_timeframe: 15m                    # stored; 1h and 4h are resampled from it
   history_years: 3                       # how far back to backfill (2–4)
@@ -23,16 +23,24 @@ data:
 # Backtest realism
 # ---------------------------------------------------------------------------
 backtest:
-  # Kraken Pro spot taker fee for the lowest volume tier. VERIFY against
-  # https://www.kraken.com/features/fee-schedule before relying on results.
-  taker_fee_pct: 0.40
+  # Kraken Pro spot taker fee for the lowest volume tier (Tier 1, $0+ 30-day
+  # volume: 0.40% maker / 0.80% taker since 9 July 2026). The bots use market
+  # orders, so they pay the taker rate. Re-check
+  # https://www.kraken.com/features/fee-schedule now and then; set it lower only
+  # if your account really sits in a higher tier.
+  taker_fee_pct: 0.80
   slippage_pct: 0.05                     # per fill
   starting_balance_usd: 20               # matches max_per_bot_usd so sims face real minimums
-  # Kraken minimum order sizes. VERIFY: paper/live load these from the exchange.
+  # Kraken minimum order sizes for the backtest. Deliberately on the strict
+  # side; live trading takes the larger of these and the exchange's own limits.
   min_order:
     BTC/USD: {min_qty: 0.0001, min_cost_usd: 5}
     ETH/USD: {min_qty: 0.002, min_cost_usd: 5}
     SOL/USD: {min_qty: 0.02, min_cost_usd: 5}
+    XRP/USD: {min_qty: 2, min_cost_usd: 5}
+    LINK/USD: {min_qty: 0.2, min_cost_usd: 5}
+    ADA/USD: {min_qty: 10, min_cost_usd: 5}
+    DOGE/USD: {min_qty: 20, min_cost_usd: 5}
 
 # ---------------------------------------------------------------------------
 # Evolution

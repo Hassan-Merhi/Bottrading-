@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS accounts (     -- one per bot per mode; live accounts
     wins INTEGER NOT NULL DEFAULT 0,
     fees REAL NOT NULL DEFAULT 0,
     hold_start_price REAL,
+    high_since_entry REAL,            -- highest price seen while in a trade (trailing stop)
     last_candle_ts INTEGER NOT NULL DEFAULT 0,
     started_at INTEGER NOT NULL,      -- ms
     closed_at INTEGER
@@ -179,4 +180,20 @@ def connect(path: str | Path) -> sqlite3.Connection:
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Columns added after the first release: (table, column, SQL type and default).
+MIGRATIONS = [
+    ("accounts", "high_since_entry", "REAL"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns that an older database is missing. CREATE IF NOT EXISTS does not."""
+    for table, column, decl in MIGRATIONS:
+        have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    conn.commit()

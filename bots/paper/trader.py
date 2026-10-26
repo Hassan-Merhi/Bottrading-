@@ -242,6 +242,21 @@ class Trader:
             if acc["qty"] > 0 and price is not None and price >= acc["target_price"]:
                 self.guard.exit_long(bot["bot_id"], mode, "target")
                 report.exits += 1
+            elif acc["qty"] > 0 and price is not None:
+                # Trailing stop and time exit run in software on top of the hard stop that
+                # rests on the exchange; both sell through the guard like any other exit.
+                if g.trail_pct > 0:
+                    high = self.guard.ledger.note_high(acc["account_id"], price)
+                    level = high * (1 - g.trail_pct / 100)
+                    if level > (acc["stop_price"] or 0) and price <= level:
+                        self.guard.exit_long(bot["bot_id"], mode, "trail")
+                        report.exits += 1
+                        acc = self.guard.ledger.by_id(acc["account_id"])
+                if acc["qty"] > 0 and g.max_hold_candles and acc["entry_ts"] and \
+                        self.clock() - acc["entry_ts"] >= \
+                        g.max_hold_candles * TIMEFRAME_MS[g.timeframe]:
+                    self.guard.exit_long(bot["bot_id"], mode, "time")
+                    report.exits += 1
         if s is None or price is None or len(s) < 2:
             return
         last_ts = int(s.ts[-1])

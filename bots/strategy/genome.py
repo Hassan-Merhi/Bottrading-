@@ -10,7 +10,7 @@ import json
 import random
 from dataclasses import asdict, dataclass, fields
 
-PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD")
+PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "LINK/USD", "ADA/USD", "DOGE/USD")
 TIMEFRAMES = ("15m", "1h", "4h")
 ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd", "volume_spike",
                "squeeze_breakout")
@@ -34,6 +34,8 @@ NUMERIC_GENES: dict[str, tuple[float, float, bool]] = {
     "mood_max": (10, 100, True),         # 0..100 means the mood filter is off
     "atr_period": (7, 30, True),         # candles in the Average True Range
     "atr_mult": (1.0, 4.0, False),       # stop distance = atr_mult x ATR, when stop_mode is atr
+    "trail_pct": (0.0, 5.0, False),      # trailing stop below the highest price since entry; 0 = off
+    "max_hold_candles": (0, 200, True),  # exit after this many candles in a trade; 0 = off
 }
 CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
     "pair": PAIRS,
@@ -46,7 +48,8 @@ MIN_FAST_SLOW_GAP = 5
 MIN_MOOD_SPAN = 10
 # Values for genes added after the first release, so stored genomes still load.
 DEFAULTS = {"vol_mult": 2.0, "trend_period": 50, "mood_min": 0, "mood_max": 100,
-            "trend_filter": "none", "stop_mode": "fixed", "atr_period": 14, "atr_mult": 2.0}
+            "trend_filter": "none", "stop_mode": "fixed", "atr_period": 14, "atr_mult": 2.0,
+            "trail_pct": 0.0, "max_hold_candles": 0}
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,8 @@ class Genome:
     stop_mode: str = "fixed"
     atr_period: int = 14
     atr_mult: float = 2.0
+    trail_pct: float = 0.0
+    max_hold_candles: int = 0
 
     @property
     def mood_filter_on(self) -> bool:
@@ -110,8 +115,11 @@ class Genome:
             stop = f"stop {self.atr_mult:.1f}x ATR({self.atr_period}), {lo:g}-{hi:g}%"
         else:
             stop = f"stop {self.stop_loss_pct:.2f}%"
+        if self.trail_pct > 0:
+            stop += f", trailing {self.trail_pct:.1f}%"
+        hold = f", exit after {self.max_hold_candles} candles" if self.max_hold_candles else ""
         return (f"{self.pair} {self.timeframe} {rule}{filters}; {stop}, "
-                f"target {self.take_profit_pct:.2f}%, size {self.position_size_pct:.0f}%, "
+                f"target {self.take_profit_pct:.2f}%{hold}, size {self.position_size_pct:.0f}%, "
                 f"max {self.max_trades_per_day}/day")
 
 
@@ -147,6 +155,10 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Gen
         v[name] = rng.randint(int(lo), int(hi)) if is_int else rng.uniform(lo, hi)
     if rng.random() < 0.5:  # half the newcomers ignore market mood
         v["mood_min"], v["mood_max"] = 0, 100
+    if rng.random() < 0.5:  # half have no trailing stop
+        v["trail_pct"] = 0.0
+    if rng.random() < 0.5:  # half hold until stop, target or exit signal
+        v["max_hold_candles"] = 0
     return repair(v)
 
 
@@ -162,6 +174,8 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         if rng.random() < rate:
             step = v[name] * rng.uniform(-scale, scale)
+            if v[name] == 0:  # a switched-off gene can switch on by a small amount
+                step = rng.uniform(0, scale) * (hi - lo)
             if is_int and abs(step) < 1:
                 step = rng.choice((-1, 1))
             v[name] = v[name] + step
