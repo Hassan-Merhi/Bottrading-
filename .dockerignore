@@ -1,0 +1,10 @@
+.git
+__pycache__
+*.pyc
+.pytest_cache
+*.db
+*.db-*
+runs/
+backups/
+LIVE_CONFIRMED*.txt
+.env

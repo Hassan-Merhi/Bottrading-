@@ -1,0 +1,31 @@
+# One always-on service: trading worker + dashboard, in PAPER mode.
+# Needs a paid instance type: free instances sleep and cannot attach a disk.
+services:
+  - type: web
+    name: trading-bots
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: bots-data
+      mountPath: /data          # database, backups, LIVE_CONFIRMED.txt
+      sizeGB: 1
+    envVars:
+      - key: MODE
+        value: PAPER
+      - key: BOTS_STATE_DIR
+        value: /data
+      - key: DASHBOARD_TOKEN    # needed for approve/decline on the dashboard
+        generateValue: true
+      - key: ANTHROPIC_API_KEY   # optional: Claude writes the daily briefing
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      # Leave the Kraken keys unset for paper trading. For live trading later, use a
+      # key with query + trade permissions only (no withdrawal).
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
