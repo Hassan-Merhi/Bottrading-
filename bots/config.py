@@ -21,6 +21,9 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     if state_dir:
         cfg["database_path"] = str(Path(state_dir) / "bots.db")
         cfg["worker"]["backups_dir"] = str(Path(state_dir) / "backups")
+    # Small hosts: cap evolution's worker processes (each holds its own copy of the data).
+    if os.environ.get("EVOLUTION_WORKERS"):
+        cfg["evolution"]["workers"] = int(os.environ["EVOLUTION_WORKERS"])
     return cfg
 
 
