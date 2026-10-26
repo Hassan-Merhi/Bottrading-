@@ -136,3 +136,19 @@ def test_rule_breakers_die(conn, cfg, synthetic_market):
     ev = Evaluation(base_genome(), [window()], 0.0, 0, "x", 0.5)
     assert run._death_cause(Bot(ev.genome, ev, 0, None), 0, 10) is None
     assert "bottom" in run._death_cause(Bot(ev.genome, ev, 0, None), 6, 10)
+
+
+def test_market_regime_on_intraday_candles():
+    import numpy as np
+
+    from bots.evolution.diagnosis import market_regime
+    from bots.tests.conftest import make_series
+
+    rng = np.random.default_rng(0)
+    n = 24 * 4 * 150  # 150 days of 15m candles
+    up = 100 * np.exp(np.cumsum(rng.normal(0.0002, 0.004, n)))
+    flat = 100 * np.exp(np.cumsum(rng.normal(0, 0.004, n)) * 0.05)
+    down = up[::-1].copy()
+    for c, want in ((up, "uptrend"), (down, "downtrend"), (flat, "sideways")):
+        s = make_series(c, c, c, c, timeframe="15m")
+        assert market_regime(s, 0, n)[0] == want

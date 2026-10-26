@@ -13,6 +13,11 @@ data:
   timeframes: [15m, 1h, 4h]
   base_timeframe: 15m                    # stored; 1h and 4h are resampled from it
   history_years: 3                       # how far back to backfill (2–4)
+  # Where old candles come from. Kraken only serves its latest 720 candles, so:
+  #   coinbaseexchange - Coinbase USD candles, minutes per pair (prices within ~0.02% of Kraken)
+  #   kraken_trades    - rebuild from Kraken's own trade history, ~4 hours per year of BTC
+  # Recent candles and all trading always use Kraken.
+  history_source: coinbaseexchange
 
 # ---------------------------------------------------------------------------
 # Backtest realism

@@ -95,7 +95,9 @@ def cmd_evolve(cfg, conn, args) -> None:
             for tf in dcfg["timeframes"]:
                 market[(pair, tf)] = series_from_df(pair, tf, resample(base, dcfg["base_timeframe"], tf))
     else:
-        label = "Kraken historical candles"
+        source = dcfg.get("history_source", "kraken_trades")
+        label = ("Kraken historical candles" if source == "kraken_trades" else
+                 f"{source} USD candle history, recent candles from Kraken")
         market = load_market(conn, dcfg["pairs"], dcfg["timeframes"], dcfg["base_timeframe"])
         if not market:
             sys.exit("No candles stored. Run `python -m bots.main fetch` (or import-csv) first.")

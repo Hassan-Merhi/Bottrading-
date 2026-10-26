@@ -1,12 +1,14 @@
-"""Fetch Kraken historical candles through the public API (no keys needed).
+"""Fetch historical candles through public APIs (no keys needed).
 
 Kraken's OHLC endpoint only returns the most recent 720 candles per timeframe,
-so years of history cannot come from it. Three sources are supported:
+so years of history cannot come from it. These sources are supported:
 
+* `backfill_from_candles` — pages through another exchange's long candle
+  history (e.g. Coinbase). Minutes per pair; prices track Kraken closely.
 * `backfill_from_trades` — rebuilds base-timeframe candles from Kraken's full
   public trade history. Slow (hours for BTC) but complete and resumable.
 * `import_kraken_csv` — loads Kraken's downloadable OHLCVT CSV files
-  (support.kraken.com, "Downloadable historical OHLCVT data"). Fastest.
+  (support.kraken.com, "Downloadable historical OHLCVT data").
 * `update_recent` — tops up the latest candles from the OHLC endpoint. Run it
   regularly to keep the store current after a backfill or import.
 
@@ -14,6 +16,7 @@ This module only uses public market-data endpoints. It never places orders.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -28,10 +31,17 @@ TIMEFRAME_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4
                 "1d": 86_400_000}
 
 
+def proxy_options(env: dict | None = None) -> dict:
+    """ccxt ignores the standard proxy variables, so pass HTTPS_PROXY on explicitly."""
+    env = env if env is not None else os.environ
+    proxy = env.get("HTTPS_PROXY") or env.get("https_proxy")
+    return {"httpsProxy": proxy} if proxy else {}
+
+
 def make_exchange(name: str = "kraken"):
     import ccxt
 
-    return getattr(ccxt, name)({"enableRateLimit": True})
+    return getattr(ccxt, name)({"enableRateLimit": True, **proxy_options()})
 
 
 def update_recent(conn: sqlite3.Connection, exchange, pair: str, timeframe: str) -> int:
@@ -140,20 +150,57 @@ def import_kraken_csv(conn: sqlite3.Connection, path: str | Path, pair: str, tim
     return upsert_candles(conn, pair, timeframe, df)
 
 
+def backfill_from_candles(conn: sqlite3.Connection, exchange, pair: str, timeframe: str,
+                          since_ms: int, until_ms: int | None = None, limit: int = 300,
+                          progress: Callable[[int, int], None] | None = None) -> int:
+    """Page through an exchange's OHLC history (for exchanges that serve old candles)."""
+    step = TIMEFRAME_MS[timeframe]
+    until_ms = until_ms or exchange.milliseconds()
+    cursor, written, pages = since_ms, 0, 0
+    while cursor < until_ms:
+        rows = exchange.fetch_ohlcv(pair, timeframe, since=cursor, limit=limit)
+        pages += 1
+        if not rows:
+            cursor += step * limit  # a gap in the exchange's history: skip ahead
+            continue
+        df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+        df = df[(df.ts >= cursor) & (df.ts + step <= until_ms)]  # closed candles only
+        written += upsert_candles(conn, pair, timeframe, df)
+        last = int(rows[-1][0])
+        if last + step <= cursor:
+            break
+        cursor = last + step
+        if progress:
+            progress(pages, cursor)
+    return written
+
+
 def backfill_all(conn: sqlite3.Connection, cfg: dict, log: Callable[[str], None] = print) -> None:
-    """Backfill every whitelisted pair at the base timeframe, then top up recent candles."""
+    """Backfill every whitelisted pair at the base timeframe, then top up recent candles.
+
+    `data.history_source` picks where old candles come from: "kraken_trades"
+    rebuilds them from Kraken's own trade history (hours per pair), any other
+    value is a ccxt exchange id serving long candle history, e.g.
+    "coinbaseexchange" (minutes per pair; USD prices within ~0.02% of Kraken's).
+    Recent candles and all trading always use Kraken.
+    """
     exchange = make_exchange(cfg["data"]["exchange"])
+    source = cfg["data"].get("history_source", "kraken_trades")
     tf = cfg["data"]["base_timeframe"]
     years = cfg["data"]["history_years"]
     since_ms = int((time.time() - years * 365.25 * 86400) * 1000)
+    history = exchange if source == "kraken_trades" else make_exchange(source)
     for pair in cfg["data"]["pairs"]:
-        log(f"Backfilling {pair} {tf} from trades since {pd.to_datetime(since_ms, unit='ms')}")
+        log(f"Backfilling {pair} {tf} from {source} since {pd.to_datetime(since_ms, unit='ms')}")
 
         def progress(pages: int, ts: int, pair=pair) -> None:
             if pages % 100 == 0:
                 log(f"  {pair}: {pages} pages, reached {pd.to_datetime(ts, unit='ms')}")
 
-        backfill_from_trades(conn, exchange, pair, tf, since_ms, progress=progress)
+        if source == "kraken_trades":
+            backfill_from_trades(conn, exchange, pair, tf, since_ms, progress=progress)
+        else:
+            backfill_from_candles(conn, history, pair, tf, since_ms, progress=progress)
         n = update_recent(conn, exchange, pair, tf)
-        log(f"  {pair}: done ({n} recent candles topped up)")
+        log(f"  {pair}: done ({n} recent Kraken candles topped up)")
     set_meta(conn, BACKFILL_DONE, str(int(time.time() * 1000)))

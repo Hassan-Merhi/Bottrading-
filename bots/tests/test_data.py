@@ -115,3 +115,28 @@ def test_splits_are_time_ordered(conn):
     w = sp.windows(4)
     assert w[0][0] == sp.start and w[-1][1] == sp.train_end
     assert all(a[1] == b[0] for a, b in zip(w, w[1:]))
+
+
+class FakeCandles:
+    """An exchange serving long candle history, 3 candles per request, with a gap."""
+
+    def __init__(self, n=10, gap=(4, 5)):
+        self.candles = [[T0 + i * Q, 1, 2, 0.5, 1.5, 1] for i in range(n) if i not in gap]
+        self.now = T0 + n * Q
+
+    def milliseconds(self):
+        return self.now
+
+    def fetch_ohlcv(self, pair, tf, since=None, limit=3):
+        return [c for c in self.candles if c[0] >= since][:3]
+
+
+def test_backfill_from_candles_pages_through_history(conn):
+    n = fetch.backfill_from_candles(conn, FakeCandles(), "BTC/USD", "15m", T0, limit=3)
+    out = load_candles(conn, "BTC/USD", "15m")
+    assert n == 8 and list(out.ts) == [T0 + i * Q for i in range(10) if i not in (4, 5)]
+
+
+def test_proxy_options():
+    assert fetch.proxy_options({"HTTPS_PROXY": "http://p:1"}) == {"httpsProxy": "http://p:1"}
+    assert fetch.proxy_options({}) == {}
