@@ -29,8 +29,11 @@ def has_api_keys(env: dict | None = None) -> bool:
 def make_live_exchange(env: dict | None = None):
     import ccxt
 
+    from bots.data.fetch import proxy_options
+
     env = env if env is not None else os.environ
     return ccxt.kraken({"apiKey": env["KRAKEN_API_KEY"], "secret": env["KRAKEN_API_SECRET"],
+                        **proxy_options(env),
                         "enableRateLimit": True})
 
 
