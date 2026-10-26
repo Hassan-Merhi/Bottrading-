@@ -65,6 +65,13 @@ evolution:
   # paper trading and waste 30 days there.
   gate:
     every_window_profitable: true        # profitable in each walk-forward train window on its own
+    # Robustness: a bot must not be a lucky point in parameter space, and its
+    # trade results must be distinguishable from chance.
+    neighbours: 8                        # variants with numeric genes nudged by up to neighbour_scale
+    neighbour_scale: 0.10                # +-10%
+    neighbour_min_profitable: 0.6        # at least this share of variants must make money on train data
+    min_trade_tstat: 2.0                 # mean trade return / its standard error over the train period
+    min_tstat_trades: 10                 # fewer trades than this cannot be judged and fail the gate
     min_test_trades: 5                   # the unseen-data test must contain at least this many trades
     max_test_drawdown_pct: 25            # and stay under this drawdown
 
@@ -124,6 +131,7 @@ worker:
   backup_hour_utc: 3
   backups_dir: backups
   backups_keep: 14
+  offsite_backup: true                   # also send a copy (no candles) to your Telegram chat nightly
   healthy_ticks_to_resume: 3             # after an API/data error, healthy loops before new entries resume
   max_candle_age_multiple: 3             # latest closed candle older than this many timeframes = stale data
 

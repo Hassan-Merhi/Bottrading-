@@ -14,9 +14,13 @@ class FakeSession:
         self.posts = []
         self.updates = updates or []
 
-    def post(self, url, json=None, timeout=None):
-        self.posts.append((url.rsplit("/", 1)[-1], json))
+    def post(self, url, json=None, timeout=None, data=None, files=None):
         method = url.rsplit("/", 1)[-1]
+        if files is not None:
+            self.posts.append((method, {"data": data, "filename": files["document"][0],
+                                        "size": len(files["document"][1].read())}))
+        else:
+            self.posts.append((method, json))
 
         class R:
             def raise_for_status(self):
@@ -138,3 +142,18 @@ def test_dashboard_draws_equity_history(dash):
     conn.commit()
     page = client.get("/").text
     assert "Equity, last" in page and "<polyline" in page
+
+
+def test_telegram_sends_files_and_passes_full_commands(tmp_path):
+    s = FakeSession([{"update_id": 9, "message": {"chat": {"id": 42}, "text": "/kill confirm"}}])
+    tg = TelegramAlerter("tok", "42", session=s)
+    f = tmp_path / "report.md"
+    f.write_text("hello")
+    assert tg.send_file(f, caption="the report") is True
+    sent = [p for m, p in s.posts if m == "sendDocument"][0]
+    assert sent["filename"] == "report.md" and sent["size"] == 5
+    assert sent["data"]["caption"] == "the report" and sent["data"]["chat_id"] == "42"
+    assert tg.send_file(tmp_path / "missing.md") is False  # never raises
+    seen = []
+    tg.poll(lambda *a: "x", lambda text: seen.append(text) or "ok")
+    assert seen == ["/kill confirm"]

@@ -29,7 +29,8 @@ from bots.evolution.fitness import Evaluation, Evaluator, score_windows
 from bots.evolution.graveyard import Graveyard, failure_summary
 from bots.data.mood import load_fear_greed
 from bots.strategy.context import MarketContext, build_context
-from bots.strategy.genome import Genome, crossover, mutate, random_genome
+from bots.strategy.genome import (ATR_GENES, NUMERIC_GENES, Genome, crossover, mutate,
+                                  random_genome, repair)
 
 _worker_evaluator: Evaluator | None = None
 
@@ -75,7 +76,8 @@ class RunResult:
     generations: list[dict] = field(default_factory=list)
     finalists: list[Finalist] = field(default_factory=list)
     deaths: int = 0
-    gate_rejected: int = 0       # top bots kept from the test because a train window lost money
+    gate_rejected: int = 0       # top bots kept from the test by the gate (see gate_notes)
+    gate_notes: list[str] = field(default_factory=list)   # "strategy: reason" per held-back bot
     falling_windows: int = 0     # train windows where simply holding the coin lost money
 
 
@@ -274,6 +276,63 @@ class EvolutionRun:
         return [f"lost money in train window {', '.join(str(i + 1) for i in losing)} "
                 f"of {len(bot.evaluation.windows)}"]
 
+    def _neighbours(self, g: Genome, n: int, scale: float) -> list[Genome]:
+        """Variants of g with every active numeric gene nudged by up to +-scale."""
+        rng = random.Random(g.hash())  # deterministic per genome, so results are repeatable
+        out = []
+        for _ in range(n):
+            v = g.to_dict()
+            for name, (lo, hi, is_int) in NUMERIC_GENES.items():
+                if name in ATR_GENES and g.stop_mode != "atr":
+                    continue
+                if v[name] == 0:
+                    continue  # a switched-off gene stays off
+                step = v[name] * rng.uniform(-scale, scale)
+                if is_int and abs(step) < 1:
+                    step = rng.choice((-1, 1))
+                v[name] = v[name] + step
+            ng = repair(v)
+            if ng != g:
+                out.append(ng)
+        return out
+
+    def _trade_returns(self, g: Genome, period: tuple[int, int]) -> np.ndarray:
+        """Per-trade return (P&L over the cash put in) across a period."""
+        s = self.market[(g.pair, g.timeframe)]
+        _, entries, exits = self._serial_evaluator.cache.get(g)
+        stops = self._serial_evaluator.cache.stops(g)
+        cost = CostModel.from_config(self.cfg["backtest"], g.pair)
+        r = run_backtest(s, entries, exits, g, s.index_of(period[0]), s.index_of(period[1]),
+                         cost, stops)
+        return np.array([t.pnl / (t.qty * t.entry_price) for t in r.trades], dtype=float)
+
+    def _robustness_reasons(self, g: Genome) -> list[str]:
+        """Why a bot may be a lucky point: fragile to small changes, or trades that look like chance."""
+        gate = self.ecfg.get("gate") or {}
+        reasons = []
+        n = int(gate.get("neighbours", 0))
+        if n > 0:
+            variants = self._neighbours(g, n, float(gate.get("neighbour_scale", 0.1)))
+            if variants:
+                ok = sum(self._serial_evaluator.evaluate(v).compounded_return > 0 for v in variants)
+                share = ok / len(variants)
+                if share < float(gate.get("neighbour_min_profitable", 0)):
+                    reasons.append(f"fragile: only {ok} of {len(variants)} nearby variants made "
+                                   "money (a lucky setting, not an edge)")
+        t_min = float(gate.get("min_trade_tstat", 0))
+        if t_min > 0:
+            rets = self._trade_returns(g, (self.splits.start, self.splits.train_end))
+            need = int(gate.get("min_tstat_trades", 10))
+            if len(rets) < need:
+                reasons.append(f"only {len(rets)} trades over the train period (need {need} to judge)")
+            else:
+                sd = float(rets.std(ddof=1))
+                t = float(rets.mean() / sd * np.sqrt(len(rets))) if sd > 0 else 0.0
+                if t < t_min:
+                    reasons.append(f"trade results not distinguishable from chance "
+                                   f"(t={t:.1f} over {len(rets)} trades, need {t_min:g})")
+        return reasons
+
     def _test_verdict(self, test: dict) -> list[str]:
         """Why the one-time unseen-data check failed; empty means it passed."""
         gate = self.ecfg.get("gate") or {}
@@ -293,9 +352,12 @@ class EvolutionRun:
         pool = bots[: max(1, int(len(bots) * 0.2))]
         scored = []
         rejected = 0
+        notes: list[str] = []
         for b in pool:
-            if self._train_gate(b):
+            reasons = self._train_gate(b) or self._robustness_reasons(b.genome)
+            if reasons:
                 rejected += 1
+                notes.append(f"{b.genome.describe()}: {'; '.join(reasons)}")
                 continue
             g = b.genome
             val = self._evaluate_period(g, self.splits.validation)
@@ -304,6 +366,7 @@ class EvolutionRun:
         chosen = [t for t in scored if t[2]["total_return"] > 0][: self.ecfg["finalists"]]
         if result is not None:
             result.gate_rejected = rejected
+            result.gate_notes = notes
             if bots:
                 result.falling_windows = sum(
                     w["hold_return"] < 0 for w in bots[0].evaluation.windows)

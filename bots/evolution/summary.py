@@ -48,8 +48,11 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
     lines += ["", "## Finalists (validation → one-time test)", ""]
     lines.append(f"Gate: a bot must have made money in every walk-forward train window on its "
                  f"own ({result.falling_windows} of those windows were falling markets, where "
-                 f"holding the coin lost money). {result.gate_rejected} top bots were held back "
-                 "by that rule and kept their one-time test for a later run.")
+                 "holding the coin lost money), most of its nearby variants must make money too, "
+                 f"and its trade results must beat chance. {result.gate_rejected} top bots were "
+                 "held back and kept their one-time test for a later run.")
+    for note in result.gate_notes[:10]:
+        lines.append(f"- held back: {note}")
     lines.append("")
     if not result.finalists:
         lines.append("No bot passed the gate and was profitable on validation data, so none was "
@@ -82,3 +85,21 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
     if gens:
         lines += ["", "Last generation: " + gens[-1]["failure_summary"]]
     return "\n".join(lines) + "\n"
+
+
+def short_summary(result: RunResult) -> str:
+    """A few lines for Telegram: what the night's run produced."""
+    gens = result.generations
+    lines = [f"Evolution run finished: {len(gens)} generations, {result.deaths} bots retired."]
+    if gens:
+        lines.append(f"Best of the final generation: {gens[-1]['best_genome']}")
+    lines.append(f"Gate held back {result.gate_rejected} of the top bots.")
+    if not result.finalists:
+        lines.append("No finalist reached the unseen-data test. Nothing new goes to paper trading.")
+    for f in result.finalists:
+        if f.passed_test:
+            lines.append(f"PASSED → paper trading: {f.genome.describe()} "
+                         f"(test {_pct(f.test['total_return'])} vs hold {_pct(f.test['hold_return'])})")
+        else:
+            lines.append(f"failed: {f.genome.describe()} ({'; '.join(f.reasons) or 'lost on unseen data'})")
+    return "\n".join(lines)

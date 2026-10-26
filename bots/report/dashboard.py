@@ -29,7 +29,7 @@ from bots.report.daily import account_rows, summary
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
-                             RiskState, now_ms)
+                             OWNER_PAUSE, RiskState, now_ms)
 from bots.strategy.genome import Genome
 
 CSS = """
@@ -581,6 +581,8 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
               "affected."),
              (ENTRY_HALT, "New trades are paused", "An API or data problem was detected. Exits still "
               "work; new entries resume after a few healthy loops."),
+             (OWNER_PAUSE, "You paused trading", "No new trades until you send /resume on "
+              "Telegram. Open positions keep their stops and targets."),
              (DAILY_HALT_UNTIL, "Daily loss limit hit", "Live trading pauses until the next UTC day.")]
     for key, label, explain in flags:
         v = st.get(key)

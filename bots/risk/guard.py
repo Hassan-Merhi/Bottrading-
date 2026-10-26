@@ -30,6 +30,7 @@ from typing import Any, Callable
 from bots.config import PROJECT_DIR
 from bots.risk.ledger import DAY_MS, Ledger
 from bots.risk.state import (CRASH_LOCK, DAILY_HALT_UNTIL, ENTRY_HALT, KILL_SWITCH, LIVE_EPOCH,
+                             OWNER_PAUSE,
                              RiskState, now_ms)
 
 HARD_CAPITAL_CEILING_USD = 100.0
@@ -149,6 +150,10 @@ class NullAlerter:
     def alert(self, text: str, kind: str = "info", buttons: list | None = None) -> None:
         print(f"[ALERT:{kind}] {text}")
 
+    def send_file(self, path, caption: str = "") -> bool:
+        print(f"[FILE] {path}: {caption}")
+        return False
+
 
 class RiskGuard:
     def __init__(self, cfg: dict, conn, paper_exchange, live_exchange=None, alerter=None,
@@ -260,6 +265,8 @@ class RiskGuard:
             raise OrderRefused("bot already has an open position (one per bot)")
         if self.state.is_set(ENTRY_HALT):
             raise OrderRefused(f"new entries halted: {self.state.get(ENTRY_HALT)}")
+        if self.state.is_set(OWNER_PAUSE):
+            raise OrderRefused(f"paused by the owner: {self.state.get(OWNER_PAUSE)}")
         if req.ref_price is None or not req.ref_price > 0:
             raise OrderRefused("buy needs a reference price for the cost check")
         cost = req.amount * req.ref_price * (1 + self.slippage) * (1 + self.fee)
@@ -523,6 +530,18 @@ class RiskGuard:
                     self._live.cancel_all_orders(pair)
                 except Exception as e:  # noqa: BLE001
                     self._event("cancel_failed", f"cancel all on {pair}: {e}", kind="critical")
+
+    def pause(self, who: str) -> None:
+        """Owner's pause: no new entries (paper or live) until resume(). Exits still work."""
+        if not self.state.is_set(OWNER_PAUSE):
+            self.state.set(OWNER_PAUSE, f"{who} at {self.clock()}")
+            self._event("owner_pause", f"New trades paused by {who}; exits and stops keep working",
+                        kind="risk")
+
+    def resume(self, who: str) -> None:
+        if self.state.is_set(OWNER_PAUSE):
+            self.state.clear(OWNER_PAUSE)
+            self._event("owner_resume", f"New trades allowed again by {who}", kind="info")
 
     def halt_entries(self, reason: str) -> None:
         """Fail-safe: stop opening trades. Existing stop-losses stay on the exchange."""
