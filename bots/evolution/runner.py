@@ -177,6 +177,8 @@ class EvolutionRun:
         self.conn.commit()
         size = self.ecfg["population_size"]
         workers = self.ecfg.get("workers") or os.cpu_count() or 1
+        self.log(f"evolution {self.run_id}: {size} bots x {self.ecfg['generations']} generations, "
+                 f"{workers} worker process(es), {len(self.market)} series")
         self._serial_evaluator = Evaluator(self.market, self.windows_ms, self.cfg, self.ctx)
         pool = None
         if workers > 1:
@@ -192,6 +194,9 @@ class EvolutionRun:
                               reverse=True)
                 population = self._next_generation(gen, bots, result,
                                                    last=gen == self.ecfg["generations"] - 1)
+                # Keep only what the next generation can reuse; the rest is dead weight.
+                keep = set(population)
+                self._evaluated = {g: e for g, e in self._evaluated.items() if g in keep}
             self._save_population(bots)
             result.finalists = self._final_checks(bots, result)
         finally:

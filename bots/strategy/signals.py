@@ -124,8 +124,13 @@ def signal_key(g: Genome) -> tuple:
 class SignalCache:
     """Cache signal positions (sorted index arrays) per distinct signal genes."""
 
+    # Memory matters: a 3-year 15m series is ~105k candles, so one float64 ATR
+    # array is ~0.8 MB and a busy signal's index array tens of KB. The caches are
+    # small enough that an evolution run fits a 512 MB host next to the worker.
+    MAX_ATR = 24
+
     def __init__(self, market: dict[tuple[str, str], Series], ctx: MarketContext | None = None,
-                 max_size: int = 20_000):
+                 max_size: int = 1_000):
         self.market = market
         self.ctx = ctx
         self.max_size = max_size
@@ -138,7 +143,7 @@ class SignalCache:
         hit = self._cache.get(key)
         if hit is None:
             entry, exit_ = compute_signals(s, g, self.ctx)
-            hit = (np.flatnonzero(entry), np.flatnonzero(exit_))
+            hit = (np.flatnonzero(entry).astype(np.int32), np.flatnonzero(exit_).astype(np.int32))
             self._cache[key] = hit
             if len(self._cache) > self.max_size:
                 self._cache.popitem(last=False)
@@ -154,8 +159,10 @@ class SignalCache:
         key = (g.pair, g.timeframe, g.atr_period)
         atr = self._atr.get(key)
         if atr is None:
-            atr = ind.atr(s.high, s.low, s.close, g.atr_period)
+            atr = ind.atr(s.high, s.low, s.close, g.atr_period).astype(np.float32)
             self._atr[key] = atr
-            if len(self._atr) > 256:
+            if len(self._atr) > self.MAX_ATR:
                 self._atr.popitem(last=False)
+        else:
+            self._atr.move_to_end(key)
         return stop_fractions(s, g, atr)

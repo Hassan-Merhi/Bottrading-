@@ -190,7 +190,8 @@ class Worker:
     HELP = ("Commands:\n/status - today's numbers\n/bots - every running bot\n"
             "/digest - this morning's briefing\n/pause - stop opening new trades "
             "(exits and stops keep working)\n/resume - allow new trades again\n"
-            "/kill confirm - close every live position, cancel orders, lock live mode")
+            "/kill confirm - close every live position, cancel orders, lock live mode\n"
+            "/evolve - start an evolution run now (one at a time)")
 
     def _command(self, text: str) -> str:
         parts = text.strip().split()
@@ -209,6 +210,12 @@ class Worker:
         if cmd == "/resume":
             self.guard.resume("Telegram")
             return "Resumed: new trades allowed again."
+        if cmd == "/evolve":
+            if self._backfill is not None and self._backfill.poll() is None:
+                return "History is still downloading; evolution starts by itself after that."
+            if self.start_evolution():
+                return "Evolution started. You get a summary here when it finishes."
+            return "An evolution run is already in progress."
         if cmd == "/kill":
             if arg != "confirm":
                 return ("This closes every live position, cancels all orders and locks live "
@@ -265,9 +272,48 @@ class Worker:
             self._backfill = self._spawn("fetch")
             self._backfill_at = time.time()
         backfilling = self._backfill is not None and self._backfill.poll() is None
-        if not backfilling and (self._evolution is None or self._evolution.poll() is not None) \
-                and self._due("evolution", w["evolution_hour_utc"]):
-            self._evolution = self._spawn("evolve")
+        self._check_evolution_process()
+        if not backfilling and self._evolution is None and (
+                self._due("evolution", w["evolution_hour_utc"]) or self._evolution_retry_due()):
+            self.start_evolution()
+
+    def start_evolution(self) -> bool:
+        """Start the nightly evolution in its own process, unless one is already running."""
+        self._check_evolution_process()
+        if self._evolution is not None:
+            return False
+        self._evolution = self._spawn("evolve")
+        return True
+
+    def _check_evolution_process(self) -> None:
+        """Reap a finished evolution process; a bad exit is reported, not swallowed."""
+        if self._evolution is None:
+            return
+        code = self._evolution.poll()
+        if code is None:
+            return
+        self._evolution = None
+        if code != 0:
+            why = ("killed: the host ran out of memory" if code in (-9, 137)
+                   else f"exit code {code}")
+            self.alerter.alert(f"The evolution run stopped before finishing ({why}). Nothing "
+                               "graduates from it. Check the Render logs; a memory kill means "
+                               "the instance is too small.", kind="critical")
+            self.state.log("evolution_failed", f"evolution process ended with {why}")
+
+    def _evolution_retry_due(self) -> bool:
+        """Today's run died unfinished and has not been retried yet: try once more."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self.state.get("last_evolution") != today or self.state.get("evolution_retry") == today:
+            return False
+        row = self.conn.execute("SELECT run_id FROM runs WHERE finished_at IS NULL AND "
+                                "started_at >= ? ORDER BY started_at DESC LIMIT 1",
+                                (today,)).fetchone()
+        if row is None:
+            return False
+        self.state.set("evolution_retry", today)
+        self.state.log("evolution_retry", f"retrying today's unfinished evolution run {row[0]}")
+        return True
 
     def _spawn(self, command: str) -> subprocess.Popen:
         """Long jobs run in their own process so trading keeps its rhythm."""

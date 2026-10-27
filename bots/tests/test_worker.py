@@ -129,3 +129,33 @@ def test_telegram_commands_pause_resume_bots_and_kill(cfg, tmp_path):
     assert "Kill switch" in w._command("/KILL confirm") and w.state.is_set(KILL_SWITCH)
     assert "/pause" in w._command("/whatever")
     w.shutdown()
+
+
+def test_dead_evolution_is_reported_and_retried_once(cfg, tmp_path):
+    from datetime import datetime, timezone
+    w, alerts = make_worker(cfg, tmp_path)
+    w.startup()
+
+    class Dead:
+        def __init__(self, code):
+            self.code = code
+
+        def poll(self):
+            return self.code
+
+    spawned = []
+    w._spawn = lambda cmd: spawned.append(cmd) or Dead(None)
+    assert w._command("/evolve") == "Evolution started. You get a summary here when it finishes."
+    assert spawned == ["evolve"] and "already in progress" in w._command("/evolve")
+    # The process dies of a memory kill: an alert, no second run until the retry rule.
+    w._evolution = Dead(-9)
+    w._check_evolution_process()
+    assert w._evolution is None and any("out of memory" in t for _, t in alerts.sent)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    w.state.set("last_evolution", today)
+    assert not w._evolution_retry_due()  # no unfinished run recorded
+    w.conn.execute("INSERT INTO runs (run_id, started_at, config_json, data_label) VALUES "
+                   "('r1', ?, '{}', 'x')", (datetime.now(timezone.utc).isoformat(),))
+    w.conn.commit()
+    assert w._evolution_retry_due() and not w._evolution_retry_due()  # once per day
+    w.shutdown()

@@ -121,7 +121,9 @@ Decline buttons on graduation alerts. Only your chat is listened to. Set
 Commands you can send the bot: `/status`, `/bots` (every running bot with its
 return), `/digest`, `/pause` (no new trades until `/resume`; exits and stops
 keep working), and `/kill confirm` (close every live position, cancel all
-orders, lock live mode until `confirm-live`).
+orders, lock live mode until `confirm-live`), and `/evolve` (start a run now).
+If a nightly run dies (for example the host runs out of memory) you get an
+alert, and the worker retries it once that day.
 
 **Off-site backup.** The nightly backup also sends a compressed copy of the
 database without price candles (a few hundred KB) to your Telegram chat

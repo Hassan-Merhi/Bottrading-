@@ -158,3 +158,17 @@ def test_signal_cache_serves_stops():
     a = cache.stops(g)
     assert a is not None and len(a) == 200 and cache.stops(base_genome()) is None
     np.testing.assert_array_equal(a, cache.stops(g))
+
+
+def test_signal_cache_memory_is_bounded():
+    rng = np.random.default_rng(2)
+    c = 100 + np.cumsum(rng.normal(0, 1, 500))
+    s = make_series(c, c + 1, c - 1, c)
+    cache = SignalCache({("BTC/USD", "1h"): s}, max_size=5)
+    for i in range(8):
+        cache.get(base_genome(fast_period=5 + i, slow_period=40))
+        cache.stops(base_genome(stop_mode="atr", atr_period=7 + i))
+    assert len(cache._cache) == 5 and len(cache._atr) <= SignalCache.MAX_ATR
+    _, entries, _ = cache.get(base_genome(fast_period=12, slow_period=40))
+    assert entries.dtype == np.int32
+    assert next(iter(cache._atr.values())).dtype == np.float32
