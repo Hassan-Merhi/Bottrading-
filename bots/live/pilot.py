@@ -114,6 +114,44 @@ def paper_qualification(conn: sqlite3.Connection, cfg: dict, bot_id: str,
     return reasons
 
 
+def certify_pilot(conn: sqlite3.Connection, cfg: dict, bot_id: str,
+                  genome_hash: str, epoch: int, now: int) -> None:
+    """Freeze verified paper evidence on initial allocation, not on every trade.
+
+    The original paper price becomes stale after graduation; a certificate
+    binds that genuinely checked forward trial to the selected genome/epoch.
+    """
+    paper = conn.execute(
+        "SELECT account_id FROM accounts WHERE bot_id=? AND mode='paper' "
+        "ORDER BY account_id DESC LIMIT 1", (bot_id,)).fetchone()
+    if paper is None:
+        raise ValueError("no paper account to certify")
+    snapshot = evidence(conn, paper["account_id"], now)
+    snapshot["historical_rules_sha256"] = rules_hash(cfg)
+    conn.execute(
+        "INSERT INTO pilot_certifications "
+        "(bot_id, genome_hash, live_epoch, paper_account_id, created_at_ms, evidence_json) "
+        "VALUES (?,?,?,?,?,?)",
+        (bot_id, genome_hash, epoch, paper["account_id"], now,
+         json.dumps(snapshot, sort_keys=True)))
+    conn.commit()
+
+
+def certified_pilot(conn: sqlite3.Connection, cfg: dict, bot_id: str,
+                    genome_hash: str, epoch: int) -> bool:
+    row = conn.execute(
+        "SELECT evidence_json FROM pilot_certifications "
+        "WHERE bot_id=? AND genome_hash=? AND live_epoch=?",
+        (bot_id, genome_hash, epoch)).fetchone()
+    if not row:
+        return False
+    try:
+        return (json.loads(row["evidence_json"]).get("historical_rules_sha256")
+                == rules_hash(cfg))
+    except (ValueError, TypeError):
+        return False
+
+
 def pilot_status(conn: sqlite3.Connection, cfg: dict, now: int) -> dict:
     """Unprivileged dashboard/API readiness: never prints secrets or writes."""
     active = conn.execute(
