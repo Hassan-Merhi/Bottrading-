@@ -108,3 +108,31 @@ def test_worker_schedules_single_refresh_and_no_overlap(cfg, tmp_path):
     worker._scheduled()
     assert spawned == ["update"]
     worker.shutdown()
+
+
+def test_recent_history_gap_is_not_called_healthy(conn, cfg):
+    cfg["data"]["pairs"] = ["BTC/USD"]
+    refresh_market_pairs(conn, PublicOHLC(), cfg, NOW)
+    conn.execute("DELETE FROM candles WHERE pair='BTC/USD' AND ts=?", (96 * STEP,))
+    conn.commit()
+    health = market_health(conn, cfg, NOW)
+    assert health["pairs"]["BTC/USD"]["status"] == "gapped"
+    assert health["pairs"]["BTC/USD"]["recent_missing_candles"] == 1
+    assert not health["healthy"]
+
+
+def test_worker_detects_failed_refresh_process(cfg, tmp_path):
+    from bots.tests.test_worker import make_worker
+
+    worker, _ = make_worker(cfg, tmp_path)
+    worker.startup()
+
+    class Failed:
+        def poll(self):
+            return 1
+
+    worker._market_refresh = Failed()
+    worker._check_market_refresh_process()
+    assert worker._market_refresh is None
+    assert worker.state.get("market_refresh_process_error") == "refresh exited with code 1"
+    worker.shutdown()
