@@ -87,6 +87,17 @@ CREATE TABLE IF NOT EXISTS deployed_bots (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS pilot_certifications (
+    bot_id TEXT NOT NULL,
+    genome_hash TEXT NOT NULL,
+    live_epoch INTEGER NOT NULL,
+    paper_account_id INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (bot_id, live_epoch),
+    FOREIGN KEY (paper_account_id) REFERENCES accounts(account_id)
+);
+
 CREATE TABLE IF NOT EXISTS accounts (     -- one per bot per mode; live accounts are kept forever
     account_id INTEGER PRIMARY KEY AUTOINCREMENT,
     bot_id TEXT NOT NULL,
