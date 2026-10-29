@@ -69,6 +69,8 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
                      ", ".join(f"{t} {n}" for t, n in coverage["entry_types"].items()))
     lines.append(f"Validation rejected {result.validation_rejected} strategies "
                  "before they could access the untouched test period.")
+    lines.append(f"Holdout test budget exhausted for {result.test_budget_blocked} finalists; "
+                 "their test was NOT run. No historical verdict is proof of future profits.")
     for note in result.validation_notes[:10]:
         lines.append(f"- failed validation: {note}")
     lines.append("")
@@ -84,7 +86,10 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
             if f.reasons:
                 verdict += " (" + "; ".join(f.reasons) + ")"
             if f.previously_tested:
-                verdict += " (test result from an earlier run)"
+                verdict += " (historical test result reused, NEVER recomputed)"
+            if f.test.get("_audit"):
+                verdict += (" (audited protocol " +
+                            str(f.test["_audit"].get("protocol", "?")) + ")")
             lines.append(
                 f"| {f.genome.describe()} | {_pct(f.validation['total_return'])} | "
                 f"{_pct(f.validation['hold_return'])} | {_pct(f.test['total_return'])} | "
@@ -116,6 +121,9 @@ def short_summary(result: RunResult) -> str:
                  "none of these used the untouched test period.")
     if result.validation_notes:
         lines.append("Main validation rejection: " + result.validation_notes[0][:250])
+    if result.test_budget_blocked:
+        lines.append(f"Protected holdout: {result.test_budget_blocked} attempts withheld "
+                     "because the monthly research budget was exhausted.")
     if not result.finalists:
         lines.append("No finalist reached the unseen-data test. Nothing new goes to paper trading.")
     for f in result.finalists:
