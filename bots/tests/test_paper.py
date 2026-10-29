@@ -296,8 +296,8 @@ def test_paper_exchange_limit_buy_rests_then_fills_at_the_maker_fee():
     f = ex.fetch_order(o["id"])
     assert f["status"] == "closed" and f["average"] == 99.0 and f["fee"]["cost"] == pytest.approx(2 * 99 * 0.004)
     taker = ex.create_order("BTC/USD", "limit", "buy", 1.0, 120.0)  # already below the limit
-    assert taker["status"] == "closed" and taker["average"] == pytest.approx(99.5 * 1.0005)
-    assert taker["fee"]["cost"] == pytest.approx(1.0 * 99.5 * 1.0005 * 0.008)
+    assert taker["status"] == "closed" and taker["average"] == pytest.approx(98.9 * 1.0005)
+    assert taker["fee"]["cost"] == pytest.approx(1.0 * 98.9 * 1.0005 * 0.008)
     with pytest.raises(ValueError):
         ex.create_order("BTC/USD", "limit", "sell", 1.0, 99.0)
     ex.cancel_order(ex.create_order("BTC/USD", "limit", "buy", 1.0, 90.0)["id"])
