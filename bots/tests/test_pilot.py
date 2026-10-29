@@ -96,7 +96,7 @@ def test_certificate_mismatch_blocks_additional_entries(cfg, conn, tmp_path):
     conn.execute("DELETE FROM pilot_certifications WHERE bot_id='candidate'")
     conn.commit()
     with pytest.raises(OrderRefused, match="pilot certificate"):
-        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 20, 3, 6, "pilot")
+        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 40, 3, 6, "pilot")
     assert not kraken.fetch_open_orders()
 
 
@@ -110,7 +110,7 @@ def test_pilot_one_bot_and_amount_caps(cfg, conn, tmp_path):
     cfg["pilot"]["max_per_bot_usd"] = 10
     guard._set_status("candidate", "live", "pilot")
     with pytest.raises(OrderRefused, match="pilot bot cap"):
-        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 20, 3, 6, "entry")
+        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 40, 3, 6, "entry")
 
 
 def test_new_live_epoch_invalidates_old_certificate(cfg, conn, tmp_path):
@@ -119,7 +119,7 @@ def test_new_live_epoch_invalidates_old_certificate(cfg, conn, tmp_path):
     guard._set_status("candidate", "live", "pilot")
     guard.state.set(LIVE_EPOCH, guard.live_epoch() + 1)
     with pytest.raises(OrderRefused, match="earlier live confirmation"):
-        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 20, 3, 6, "pilot")
+        guard.enter_long("candidate", "live", "BTC/USD", 50_000, 40, 3, 6, "pilot")
 
 
 def test_owner_approval_without_historical_test_stays_blocked(cfg, conn, tmp_path):
