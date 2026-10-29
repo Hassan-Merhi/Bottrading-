@@ -21,11 +21,12 @@ class PaperExchange:
     id = "paper"
 
     def __init__(self, fee: float, slippage: float, clock=now_ms, maker_fee: float | None = None,
-                 spread_bps: float = 0.0):
+                 spread_bps: float = 0.0, limit_timeout_s: float = 120.0):
         self.fee = fee
         self.maker_fee = fee if maker_fee is None else maker_fee
         self.slippage = slippage
         self.spread_bps = spread_bps
+        self.limit_timeout_ms = int(limit_timeout_s * 1000)
         self.clock = clock
         self.prices: dict[str, float] = {}
         self.orders: dict[str, dict] = {}
@@ -43,9 +44,14 @@ class PaperExchange:
             if order["symbol"] != pair or order["status"] != "open":
                 continue
             if order["type"] == "limit":
-                # OHLC lows may predate this two-minute order. Only a quote
-                # observed while the order exists can confirm a maker fill.
-                if price <= order["price"]:
+                # An expired order cannot fill when a delayed worker next polls.
+                if self.clock() - order["timestamp"] >= self.limit_timeout_ms:
+                    order["status"] = "canceled"
+                    continue
+                # OHLC lows may predate this two-minute order. A crossing
+                # executable quote (after spread/slippage) is required.
+                ask = market_fill_price(price, "buy", self.slippage, self.spread_bps)
+                if ask <= order["price"]:
                     self._fill(order, order["price"], maker=True)
                 continue
             stop = order["stopLossPrice"]
@@ -75,7 +81,9 @@ class PaperExchange:
                  "timestamp": self.clock()}
         self.orders[oid] = order
         if type == "limit":
-            if self.prices[symbol] <= price:  # already marketable: fills now as a taker
+            ask = market_fill_price(self.prices[symbol], "buy", self.slippage,
+                                    self.spread_bps)
+            if ask <= price:  # already marketable; otherwise rests on the book
                 self._fill(order, self.prices[symbol])
         elif "stopLossPrice" in params:
             order["stopLossPrice"] = float(params["stopLossPrice"])
@@ -88,6 +96,8 @@ class PaperExchange:
     def _fill(self, order: dict, px: float, maker: bool = False) -> None:
         if not maker:  # takers pay assumed half-spread and execution slippage
             px = market_fill_price(px, order["side"], self.slippage, self.spread_bps)
+            if order["type"] == "limit" and px > order["price"]:
+                raise ValueError("limit order cannot fill worse than its buy price")
         rate = self.maker_fee if maker else self.fee
         order.update(status="closed", filled=order["amount"], average=px,
                      fee={"cost": order["amount"] * px * rate, "currency": "USD"})
