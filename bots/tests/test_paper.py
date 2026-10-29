@@ -43,6 +43,7 @@ class FakeMarket:
 @pytest.fixture
 def setup(cfg, conn, tmp_path, monkeypatch):
     cfg = live_cfg(cfg)
+    cfg["execution"]["entry_order"] = "market"  # general lifecycle tests need immediate fills
     guard, paper, kraken, alerts, clock = make_guard(cfg, conn, tmp_path)
     md = FakeMarket(clock)
     trader = Trader(cfg, conn, guard, ReadOnlyExchange(md), paper, alerts)
@@ -372,3 +373,29 @@ def test_paper_slots_are_spread_over_coins_and_rules(setup):
     assert {(g.pair, g.entry_type) for g in deployed} == {
         ("BTC/USD", "ema_cross"), ("ETH/USD", "breakout"), ("SOL/USD", "macd")}
     assert conn.execute("SELECT COUNT(*) FROM candidates WHERE stage='awaiting_paper'").fetchone()[0] == 2
+
+
+def test_paper_limit_respects_executable_ask_and_never_overpays():
+    ex = PaperExchange(fee=0.008, slippage=0.0005, spread_bps=10)
+    ex.update_price("BTC/USD", 100.0)
+    order = ex.create_order("BTC/USD", "limit", "buy", 1.0, 100.0)
+    assert order["status"] == "open"  # last trade == limit, but ask is above it
+    ex.update_price("BTC/USD", 100.0, low=97.0)
+    assert ex.fetch_order(order["id"])["status"] == "open"  # old candle low isn't an observed quote
+    ex.update_price("BTC/USD", 99.0)
+    filled = ex.fetch_order(order["id"])
+    assert filled["status"] == "closed"
+    assert filled["average"] == 100.0
+    assert filled["average"] <= order["price"]
+
+
+def test_paper_expired_limit_does_not_fill_after_price_crosses():
+    now = [1000]
+    ex = PaperExchange(fee=0.008, slippage=0.0005, clock=lambda: now[0],
+                       limit_timeout_s=120)
+    ex.update_price("BTC/USD", 100.0)
+    pending = ex.create_order("BTC/USD", "limit", "buy", 1.0, 99.0)
+    now[0] += 121_000
+    ex.update_price("BTC/USD", 90.0)
+    order = ex.fetch_order(pending["id"])
+    assert order["status"] == "canceled" and order["filled"] == 0
