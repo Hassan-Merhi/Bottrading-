@@ -206,6 +206,33 @@ def cmd_watchdog(cfg, conn, args) -> None:
     print(f"OK: last report {age_h * 60:.0f} min ago")
 
 
+def cmd_audit_live(cfg, conn, args) -> None:
+    """Owner-run READ-ONLY Kraken reconciliation, never places a trade."""
+    from bots.live.exchange import (has_api_keys, make_live_exchange,
+                                    check_cannot_withdraw, check_can_query)
+    from bots.live.reconcile import ReconciliationError, reconcile_live_orders
+    from bots.risk.ledger import Ledger
+    from bots.risk.state import LIVE_RECON_HALT, RiskState
+    env = dict(os.environ)
+    if not has_api_keys(env):
+        sys.exit("No authenticated Kraken key. No live order audit can be performed.")
+    exchange = make_live_exchange(env)
+    try:
+        check_cannot_withdraw(exchange)
+        check_can_query(exchange)
+        result = reconcile_live_orders(exchange, Ledger(conn), cfg["data"]["pairs"])
+    except Exception:
+        RiskState(conn).set(LIVE_RECON_HALT, "read-only Kraken audit failed; manual review required")
+        sys.exit("Live audit FAILED. Reconciliation lock retained; inspect live Kraken orders.")
+    print(f"Read-only Kraken audit passed: {result['open_orders']} known orders, "
+          f"{result['active_live_accounts']} live accounts. No orders submitted.")
+    if getattr(args, "acknowledge", False):
+        RiskState(conn).clear(LIVE_RECON_HALT)
+        RiskState(conn).log("reconciliation_approved",
+                            "owner acknowledged verified Kraken order reconciliation")
+        print("Reconciliation lock cleared; other live confirmation and safety gates remain.")
+
+
 def cmd_confirm_live(cfg, conn, args) -> None:
     """The owner's confirmation. Clears the crash lock and, with a fresh
     LIVE_CONFIRMED.txt, the kill switch. Never raises any limit."""
@@ -261,6 +288,9 @@ def main(argv: list[str] | None = None) -> None:
     dg = sub.add_parser("digest", help="AI analyst: write and send today's market briefing")
     dg.add_argument("--no-send", action="store_true", help="print only, no Telegram message")
     sub.add_parser("watchdog", help="alert if the worker has stopped reporting")
+    audit = sub.add_parser("audit-live", help="read-only verification of live Kraken orders")
+    audit.add_argument("--acknowledge", action="store_true",
+                       help="clear reconciliation lock only after a successful authenticated audit")
     sub.add_parser("confirm-live", help="owner confirmation after a crash or kill switch")
     args = p.parse_args(argv)
 
@@ -273,7 +303,7 @@ def main(argv: list[str] | None = None) -> None:
     {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update, "fetch-mood": cmd_fetch_mood,
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
      "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "watchdog": cmd_watchdog,
-     "confirm-live": cmd_confirm_live}[args.cmd](cfg, conn, args)
+     "confirm-live": cmd_confirm_live, "audit-live": cmd_audit_live}[args.cmd](cfg, conn, args)
 
 
 if __name__ == "__main__":
