@@ -85,6 +85,9 @@ def add_bot(conn, bot_id, status="paper", **genes):
 
 
 def make_guard(cfg, conn, tmp_path, live=True, mode_env="LIVE", confirm="60", clock=None):
+    # Risk-guard lifecycle tests require a filled position to exercise stop,
+    # loss and kill-switch behavior. Limit-specific tests explicitly set LIMIT.
+    cfg["execution"]["entry_order"] = "market"
     clock = clock or Clock()
     alerts = Alerts()
     paper = PaperExchange(0.004, 0.0005, clock)

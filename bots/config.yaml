@@ -30,7 +30,8 @@ backtest:
   # if your account really sits in a higher tier.
   taker_fee_pct: 0.80
   maker_fee_pct: 0.40                    # Tier 1 maker rate; paid by resting limit entries
-  slippage_pct: 0.05                     # per fill
+  slippage_pct: 0.05                     # per market fill, on top of assumed half spread
+  spread_bps: 10                         # conservative full bid/ask spread assumption, 10 bps
   starting_balance_usd: 20               # matches max_per_bot_usd so sims face real minimums
   # Kraken minimum order sizes for the backtest. Deliberately on the strict
   # side; live trading takes the larger of these and the exchange's own limits.
@@ -50,6 +51,11 @@ execution:
   entry_order: limit                     # limit: rest a buy at the bid and pay the maker fee;
                                          # market: buy at once at the taker fee
   limit_timeout_s: 120                   # cancel an entry that has not filled after this long
+  limit_bid_offset_bps: 5                # historical prior-close bid proxy (half of assumed spread)
+  limit_trade_through_bps: 2             # intrabar maker fills require strict trade-through
+  # OHLC cannot prove a fill in 120 s when the chart bar is 15m, 1h or 4h.
+  # Backtesting accepts only opening cross-through in that case; it may
+  # undercount good resting fills rather than invent them.
   # Exits (stop, target, trailing, time, signal) are always market orders.
 
 # ---------------------------------------------------------------------------

@@ -59,13 +59,17 @@ def test_stop_assumed_first_when_stop_and_target_share_a_candle():
     assert t.reason == "stop"
 
 
-def test_take_profit():
+def test_take_profit_requires_closed_candle_then_next_open():
     o, h, l, c = flat(10)
-    h[6] = 110.0
+    h[6] = 110.0  # a wick alone cannot trigger a software target
     g = base_genome(stop_loss_pct=2, take_profit_pct=5)
+    wick = run(make_series(o, h, l, c), [2], [], g)
+    assert wick.trades[0].reason == "end"
+    c[6] = 110.0
+    o[7] = 103.0  # next market open is lower than the target
     t = run(make_series(o, h, l, c), [2], [], g).trades[0]
-    assert t.reason == "target" and t.exit_idx == 6
-    assert t.exit_price == pytest.approx(100 * (1 + SLIP) * 1.05 * (1 - SLIP))
+    assert t.reason == "target" and t.exit_idx == 7
+    assert t.exit_price == pytest.approx(103.0 * (1 - SLIP))
 
 
 def test_orders_below_exchange_minimum_are_refused():
@@ -178,19 +182,22 @@ def test_trailing_stop_follows_prior_highs_and_locks_profit():
     for k, (op, hi, lo) in {5: (108, 110, 108), 6: (110, 112, 110), 7: (110, 112, 109.5),
                             8: (108, 108, 105)}.items():  # a run-up, then a dip
         o[k], h[k], l[k], c[k] = op, hi, lo, op
-    # Entry fills at candle 4. The trail sits 3% under the prior high: 108.64 after
-    # candle 6's 112. Candle 7's low (109.5) survives it; candle 8's low (105) does not.
+    # A software trail observes closed prices, not OHLC highs/lows.
+    # The 105 close at candle 8 crosses the trail from the previous close of 110;
+    # the sell happens at the next open, not at the intrabar stop price.
+    c[8] = 105.0
+    o[9], h[9], l[9], c[9] = 107.0, 107.0, 107.0, 107.0
     s = make_series(o, h, l, c)
     g = base_genome(stop_loss_pct=5.0, take_profit_pct=50, trail_pct=3.0)
     r = run(s, [3], [], g)
     t = r.trades[0]
-    assert t.reason == "trail" and t.exit_idx == 8
-    assert t.exit_price == pytest.approx(min(112.0 * 0.97, o[8]) * (1 - SLIP))
+    assert t.reason == "trail" and t.exit_idx == 9
+    assert t.exit_price == pytest.approx(107.0 * (1 - SLIP))
     assert t.pnl > 0 and r.metrics["trail_outs"] == 1 and r.metrics["stop_outs"] == 0
-    # A high inside the same candle as the dip must not raise the stop for that candle.
+    # Candle-8 highs do not create a fictitious earlier intrabar trailing fill.
     h2, l2 = h.copy(), l.copy()
     h2[8], l2[8] = 130.0, 105.0
-    assert run(make_series(o, h2, l2, c), [3], [], g).trades[0].exit_idx == 8
+    assert run(make_series(o, h2, l2, c), [3], [], g).trades[0].exit_idx == 9
 
 
 def test_time_exit_fills_at_the_open_after_max_hold_candles():
@@ -209,20 +216,56 @@ def test_time_exit_fills_at_the_open_after_max_hold_candles():
     assert "exit after" not in base_genome().describe() and "exit after 3" in g.describe()
 
 
-def test_limit_entry_fills_only_when_the_candle_dips_below_the_open():
+def test_limit_entry_cannot_assume_two_minute_fill_from_hourly_candle():
     import dataclasses
     o, h, l, c = flat(10)
-    o[3], h[3], l[3], c[3] = 101.0, 101.0, 101.0, 101.0  # the fill candle never dips below its open
+    o[3], h[3], l[3], c[3] = 101.0, 102.0, 99.0, 101.0
     s = make_series(o, h, l, c)
     g = base_genome(position_size_pct=50, stop_loss_pct=5, take_profit_pct=15)
-    limit = dataclasses.replace(COST, maker_fee=0.002, entry_order="limit")
-    assert run(s, [2], [5], g, cost=limit).trades == []  # low == open: the bid never filled
-    l[3] = 100.5  # the candle traded below its open: the resting bid fills at the open
-    s = make_series(o, h, l, c)
-    r = run(s, [2], [5], g, cost=limit)
+    limit = dataclasses.replace(COST, maker_fee=0.002, entry_order="limit",
+                                limit_timeout_s=120, limit_bid_offset_bps=5)
+    missed = run(s, [2], [5], g, cost=limit)
+    assert missed.trades == [] and missed.metrics["unfilled_limit_orders"] == 1
+    # The bid is based on known signal close (100) not future candle open.
+    # A gap opening through the bid is possible, but charged as taker.
+    o[3], h[3], l[3], c[3] = 99.5, 100.0, 99.0, 99.5
+    r = run(make_series(o, h, l, c), [2], [5], g, cost=limit)
     t = r.trades[0]
-    assert t.entry_price == pytest.approx(101.0)  # no slippage on a resting order
+    bid = 100.0 * (1 - 5 / 10_000)
+    assert t.entry_price == pytest.approx(bid)
     notional = 500.0
-    assert t.fees == pytest.approx(notional * 0.002 + (notional / 101.0) * t.exit_price * FEE)
-    assert run(s, [2], [5], g).trades[0].entry_price == pytest.approx(101.0 * (1 + SLIP))
+    assert t.fees == pytest.approx(notional * FEE + (notional / bid) * t.exit_price * FEE)
     assert limit.entry_fee == 0.002 and COST.entry_fee == FEE
+
+
+def test_explicit_spread_and_slippage_reduce_market_strategy_returns():
+    import dataclasses
+    o, h, l, c = flat(10)
+    o[3] = 101.0
+    s = make_series(o, h, l, c)
+    g = base_genome(position_size_pct=50, stop_loss_pct=5, take_profit_pct=15)
+    raw = run(s, [2], [5], g)
+    widened = run(s, [2], [5], g, cost=dataclasses.replace(COST, spread_bps=10))
+    assert widened.trades[0].entry_price > raw.trades[0].entry_price
+    assert widened.trades[0].exit_price < raw.trades[0].exit_price
+    assert widened.metrics["total_return"] < raw.metrics["total_return"]
+
+
+def test_limit_timeout_requires_finer_intrabar_data():
+    from bots.execution.model import limit_fill_kind
+    assert limit_fill_kind(101, 95, 100, 900_000, 120_000, 2) is None
+    assert limit_fill_kind(101, 99, 100, 60_000, 120_000, 2) == "maker"
+    assert limit_fill_kind(99, 98, 100, 900_000, 120_000, 2) == "taker"
+
+
+def test_paper_backtest_share_market_execution_price():
+    from bots.execution.model import market_fill_price
+    from bots.paper.exchange import PaperExchange
+
+    px, slip, spread = 100.0, 0.0005, 10.0
+    ex = PaperExchange(0.008, slip, maker_fee=0.004, spread_bps=spread)
+    ex.update_price("BTC/USD", px)
+    buy = ex.create_order("BTC/USD", "market", "buy", 1.0)
+    sell = ex.create_order("BTC/USD", "market", "sell", 1.0)
+    assert buy["average"] == pytest.approx(market_fill_price(px, "buy", slip, spread))
+    assert sell["average"] == pytest.approx(market_fill_price(px, "sell", slip, spread))

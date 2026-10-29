@@ -43,6 +43,7 @@ class FakeMarket:
 @pytest.fixture
 def setup(cfg, conn, tmp_path, monkeypatch):
     cfg = live_cfg(cfg)
+    cfg["execution"]["entry_order"] = "market"  # general lifecycle tests need immediate fills
     guard, paper, kraken, alerts, clock = make_guard(cfg, conn, tmp_path)
     md = FakeMarket(clock)
     trader = Trader(cfg, conn, guard, ReadOnlyExchange(md), paper, alerts)
@@ -292,12 +293,12 @@ def test_paper_exchange_limit_buy_rests_then_fills_at_the_maker_fee():
     assert o["status"] == "open" and o["filled"] == 0
     ex.update_price("BTC/USD", 99.5, low=99.2)
     assert ex.fetch_order(o["id"])["status"] == "open"
-    ex.update_price("BTC/USD", 99.5, low=98.9)
+    ex.update_price("BTC/USD", 98.9, low=98.8)  # now the observed quote actually crosses the bid
     f = ex.fetch_order(o["id"])
     assert f["status"] == "closed" and f["average"] == 99.0 and f["fee"]["cost"] == pytest.approx(2 * 99 * 0.004)
     taker = ex.create_order("BTC/USD", "limit", "buy", 1.0, 120.0)  # already below the limit
-    assert taker["status"] == "closed" and taker["average"] == pytest.approx(99.5 * 1.0005)
-    assert taker["fee"]["cost"] == pytest.approx(1.0 * 99.5 * 1.0005 * 0.008)
+    assert taker["status"] == "closed" and taker["average"] == pytest.approx(98.9 * 1.0005)
+    assert taker["fee"]["cost"] == pytest.approx(1.0 * 98.9 * 1.0005 * 0.008)
     with pytest.raises(ValueError):
         ex.create_order("BTC/USD", "limit", "sell", 1.0, 99.0)
     ex.cancel_order(ex.create_order("BTC/USD", "limit", "buy", 1.0, 90.0)["id"])
@@ -314,7 +315,7 @@ def test_limit_entry_rests_fills_and_times_out_through_the_guard(setup, monkeypa
     assert acc["qty"] == 0 and acc["pending_order_id"] and acc["pending_price"] == pytest.approx(50_000 * 0.998)
     signals["entry"] = False
     clock.t += 30_000
-    md.price, md.low = 49_950, 49_850  # traded below the bid: the resting order fills
+    md.price, md.low = 49_850, None  # observed quote crosses bid after order submission
     trader.tick()
     acc = guard.ledger.account("b1", "paper")
     assert acc["qty"] > 0 and acc["pending_order_id"] is None and acc["stop_order_id"]
@@ -336,6 +337,7 @@ def test_limit_entry_rests_fills_and_times_out_through_the_guard(setup, monkeypa
     assert paper.fetch_order(list(paper.orders)[-1])["status"] == "canceled"
     # An exit signal while the entry rests withdraws it (timeout set long enough to see it).
     cfg["execution"]["limit_timeout_s"] = 10 * 3600
+    paper.limit_timeout_ms = 10 * 3600 * 1000
     clock.t += H
     signals["entry"] = True
     trader.tick()
@@ -372,3 +374,29 @@ def test_paper_slots_are_spread_over_coins_and_rules(setup):
     assert {(g.pair, g.entry_type) for g in deployed} == {
         ("BTC/USD", "ema_cross"), ("ETH/USD", "breakout"), ("SOL/USD", "macd")}
     assert conn.execute("SELECT COUNT(*) FROM candidates WHERE stage='awaiting_paper'").fetchone()[0] == 2
+
+
+def test_paper_limit_respects_executable_ask_and_never_overpays():
+    ex = PaperExchange(fee=0.008, slippage=0.0005, spread_bps=10)
+    ex.update_price("BTC/USD", 100.0)
+    order = ex.create_order("BTC/USD", "limit", "buy", 1.0, 100.0)
+    assert order["status"] == "open"  # last trade == limit, but ask is above it
+    ex.update_price("BTC/USD", 100.0, low=97.0)
+    assert ex.fetch_order(order["id"])["status"] == "open"  # old candle low isn't an observed quote
+    ex.update_price("BTC/USD", 99.0)
+    filled = ex.fetch_order(order["id"])
+    assert filled["status"] == "closed"
+    assert filled["average"] == 100.0
+    assert filled["average"] <= order["price"]
+
+
+def test_paper_expired_limit_does_not_fill_after_price_crosses():
+    now = [1000]
+    ex = PaperExchange(fee=0.008, slippage=0.0005, clock=lambda: now[0],
+                       limit_timeout_s=120)
+    ex.update_price("BTC/USD", 100.0)
+    pending = ex.create_order("BTC/USD", "limit", "buy", 1.0, 99.0)
+    now[0] += 121_000
+    ex.update_price("BTC/USD", 90.0)
+    order = ex.fetch_order(pending["id"])
+    assert order["status"] == "canceled" and order["filled"] == 0

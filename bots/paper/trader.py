@@ -213,14 +213,12 @@ class Trader:
             bid = ticker.get("bid")
             if bid is not None and math.isfinite(float(bid)) and 0 < float(bid) <= last:
                 bids[pair] = float(bid)
-            s = series.get((pair, base))
-            low = None
-            if s is not None:
-                since = self._low_since.get(pair, int(s.ts[-1]))
-                recent = s.low[s.ts >= since]
-                low = float(recent.min()) if len(recent) else None
-                self._low_since[pair] = int(s.ts[-1])
-            self.paper.update_price(pair, last, low=low)
+            # A 15-minute candle's low may have occurred *before* the order
+            # was submitted. Feeding that historical low into the paper
+            # exchange creates fictitious stop/limit executions. Use observed
+            # ticker quotes only; paper fills remain an approximation, not a
+            # substitute for exchange trade/tick replay.
+            self.paper.update_price(pair, last)
         self.guard.update_marks(prices)
         if not report.healthy:
             self.guard.halt_entries("; ".join(report.errors))

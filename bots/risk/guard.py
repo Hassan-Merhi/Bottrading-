@@ -278,7 +278,12 @@ class RiskGuard:
             raise OrderRefused(f"paused by the owner: {self.state.get(OWNER_PAUSE)}")
         if req.ref_price is None or not req.ref_price > 0:
             raise OrderRefused("buy needs a reference price for the cost check")
-        cost = req.amount * req.ref_price * (1 + self.slippage) * (1 + self.fee)
+        # Reserve an executable ask rather than a mid-price for market buys.
+        # Limit buys reserve the worst permitted limit price and taker fee.
+        half_spread = float(self.cfg["backtest"].get("spread_bps", 0)) / 20_000
+        execution_factor = (1.0 if req.order_type == "limit"
+                            else 1.0 + self.slippage + half_spread)
+        cost = req.amount * req.ref_price * execution_factor * (1 + self.fee)
         if cost > self.ledger.tradable_cash(acc) + 1e-9:
             raise OrderRefused(f"cost ${cost:.2f} exceeds tradable cash "
                                f"${self.ledger.tradable_cash(acc):.2f}")
@@ -352,7 +357,9 @@ class RiskGuard:
         use_limit = execution.get("entry_order") == "limit"
         px = (limit_price or ref_price) if use_limit else ref_price
         budget = self.ledger.tradable_cash(acc) * size_pct / 100
-        amount = budget / (px * (1 + self.slippage) * (1 + self.fee))
+        half_spread = float(self.cfg["backtest"].get("spread_bps", 0)) / 20_000
+        execution_factor = 1.0 if use_limit else 1.0 + self.slippage + half_spread
+        amount = budget / (px * execution_factor * (1 + self.fee))
         if mode == "live":
             amount = float(self._live.amount_to_precision(pair, amount))
         if use_limit:
