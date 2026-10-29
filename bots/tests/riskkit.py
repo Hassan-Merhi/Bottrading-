@@ -29,6 +29,7 @@ class FakeKraken(PaperExchange):
         super().__init__(fee=0.004, slippage=0.0005, clock=clock)
         self.free_usd = 1000.0
         self.fail_stop = False
+        self.fail_cancel = False
         self.can_withdraw = False
         self.cancel_all_calls: list = []
 
@@ -36,6 +37,11 @@ class FakeKraken(PaperExchange):
         if params and "stopLossPrice" in params and self.fail_stop:
             raise RuntimeError("EOrder:Unknown order")
         return super().create_order(symbol, type, side, amount, price, params)
+
+    def cancel_order(self, id, symbol=None):
+        if self.fail_cancel:
+            raise ConnectionError("Kraken cancel acknowledgment unavailable")
+        return super().cancel_order(id, symbol)
 
     def fetch_balance(self):
         return {"free": {"USD": self.free_usd}}
