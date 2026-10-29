@@ -16,7 +16,14 @@ from bots.strategy.genome import CATEGORICAL_GENES, NUMERIC_GENES, Genome
 
 # Diagnoses that describe being beaten rather than a mistake. They are logged
 # but do not make similar genomes look bad.
-NOT_A_MISTAKE = {"outcompeted by stronger bots"}
+NOT_A_MISTAKE = {
+    "outcompeted by stronger bots",
+    # Neither a zero-fill historical approximation nor a small trade sample
+    # establishes a faulty strategy; retain audit rows but do not teach the
+    # graveyard to suppress all nearby alternatives.
+    "limit fills unverified at candle resolution",
+    "too few trades to trust",
+}
 
 
 def _encode(g: Genome) -> tuple[np.ndarray, np.ndarray]:

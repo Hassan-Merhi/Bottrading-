@@ -71,6 +71,13 @@ evolution:
   newcomer_fraction: 0.10                # random newcomers each generation
   mutation_rate: 0.3                     # per-gene probability of mutating
   mutation_scale: 0.10                   # ±10% on numeric genes
+  # Maintain coverage across independent coin/strategy combinations without
+  # relaxing validation, tests, or risk limits.
+  max_elite_pair_share: 0.40             # cap one coin's share of elite parents if alternatives exist
+  max_elite_family_share: 0.20           # cap one (coin, entry rule) family
+  candidate_pool_fraction: 0.20         # rank and screen diverse top 20% before validation
+  max_candidate_pair_share: 0.40
+  max_candidate_family_share: 0.20
   bot_max_drawdown_pct: 25               # death: drawdown beyond this
   death_min_trades: 20                   # death: below starting balance after this many trades
   finalists: 5                           # candidates that get the one-time test-set check
@@ -98,6 +105,8 @@ fitness:
   min_trades: 20                         # penalty below this
   trades_penalty: 1.0                    # scaled by the shortfall fraction
   hold_penalty: 0.5                      # scaled by fraction of windows that failed to beat holding
+  losing_window_penalty: 0.75            # steer search toward profit in all train windows
+  unfilled_limit_penalty: 0.35           # don't reward unverified short-lived limit fills
   consistency_weight: 0.5                # fitness = mean(window scores) - w * std(window scores)
 
 graveyard:

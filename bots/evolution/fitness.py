@@ -69,6 +69,20 @@ def score_windows(windows: list[dict], fcfg: dict) -> float:
 
     failed_hold = np.mean([w["total_return"] <= w["hold_return"] for w in windows])
     score -= fcfg["hold_penalty"] * failed_hold
+
+    # The promotion gate requires positive results in *every* training window.
+    # Reward candidates that approach that criterion during breeding, rather
+    # than rewarding a huge lucky return in one window despite repeated losses.
+    losing_fraction = np.mean([w["total_return"] <= 0 for w in windows])
+    score -= float(fcfg.get("losing_window_penalty", 0)) * losing_fraction
+
+    # Limit orders that could not be established as filled by the available
+    # OHLC resolution are not evidence of good execution. A strategy with zero
+    # proven fills should not appear fit because it happened to avoid losses.
+    missing = sum(w.get("unfilled_limit_orders", 0) for w in windows)
+    attempted = missing + trades
+    if attempted:
+        score -= float(fcfg.get("unfilled_limit_penalty", 0)) * missing / attempted
     return float(score)
 
 
