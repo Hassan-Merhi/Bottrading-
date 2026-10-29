@@ -321,6 +321,7 @@ class Trader:
     def paper_stats(self, acc, price: float | None) -> dict:
         now = self.clock()
         ev = evidence(self.conn, acc["account_id"], now)
+        ev["verified_trades"] = min(ev["verified_trades"], int(acc["trades"]))
         eq = self.guard.ledger.equity(acc, price)
         ret = eq / acc["allocation"] - 1
         hold = net_hold_return(acc["hold_start_price"], price, self.cfg)
