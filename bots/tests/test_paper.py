@@ -77,8 +77,11 @@ def test_validate_candles():
 def test_deploys_candidates_and_trades_through_the_guard(setup):
     cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
     g = add_bot(conn, "x", "retired")  # just to get a genome json
-    conn.execute("INSERT INTO candidates VALUES ('h1','r',?,1.0,'{}','{}',1,'awaiting_paper','t')",
-                 (g.to_json(),))
+    from bots.evolution.verification import PROTOCOL_VERSION, rules_hash
+    audited = json.dumps({"_audit": {"protocol": PROTOCOL_VERSION,
+                                    "rules_sha256": rules_hash(cfg)}})
+    conn.execute("INSERT INTO candidates VALUES ('h1','r',?,1.0,'{}',?,1,'awaiting_paper','t')",
+                 (g.to_json(), audited))
     conn.commit()
     assert trader.deploy_candidates() == 1
     bot_id = conn.execute("SELECT bot_id FROM deployed_bots WHERE status='paper'").fetchone()[0]
@@ -364,8 +367,11 @@ def test_paper_slots_are_spread_over_coins_and_rules(setup):
              ("ETH/USD", "ema_cross"), ("ETH/USD", "breakout"), ("SOL/USD", "macd")]
     for i, (pair, rule) in enumerate(specs):
         g = base_genome(pair=pair, entry_type=rule, fast_period=5 + i)
-        conn.execute("INSERT INTO candidates VALUES (?,'r',?,?,'{}','{}',1,'awaiting_paper','t')",
-                     (g.hash(), g.to_json(), 10 - i))
+        from bots.evolution.verification import PROTOCOL_VERSION, rules_hash
+        audited = json.dumps({"_audit": {"protocol": PROTOCOL_VERSION,
+                                        "rules_sha256": rules_hash(cfg)}})
+        conn.execute("INSERT INTO candidates VALUES (?,'r',?,?,'{}',?,1,'awaiting_paper','t')",
+                     (g.hash(), g.to_json(), 10 - i, audited))
     conn.commit()
     assert trader.deploy_candidates() == 4
     deployed = [trader.genome(b) for b in trader.bots(("paper",))]
@@ -400,3 +406,15 @@ def test_paper_expired_limit_does_not_fill_after_price_crosses():
     ex.update_price("BTC/USD", 90.0)
     order = ex.fetch_order(pending["id"])
     assert order["status"] == "canceled" and order["filled"] == 0
+
+
+def test_legacy_unaudited_candidate_is_not_auto_deployed(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    from bots.tests.test_strategy import base_genome
+    g = base_genome()
+    conn.execute("INSERT INTO candidates VALUES (?,'r',?,1.0,'{}','{}',1,'awaiting_paper','t')",
+                 (g.hash(), g.to_json()))
+    conn.commit()
+    assert trader.deploy_candidates() == 0
+    assert conn.execute("SELECT stage FROM candidates WHERE genome_hash=?",
+                        (g.hash(),)).fetchone()[0] == "awaiting_paper"
