@@ -437,3 +437,46 @@ def test_legacy_unaudited_candidate_is_not_auto_deployed(setup):
     assert trader.deploy_candidates() == 0
     assert conn.execute("SELECT stage FROM candidates WHERE genome_hash=?",
                         (g.hash(),)).fetchone()[0] == "awaiting_paper"
+
+
+def test_backdated_account_without_observed_sessions_cannot_graduate(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    acc = guard.ledger.account("b1", "paper")
+    conn.execute("UPDATE accounts SET started_at=?, trades=25, cash=26, last_equity=26 "
+                 "WHERE account_id=?", (clock.t - 40 * DAY, acc["account_id"]))
+    conn.commit()
+    eligible, missing = trader.graduation_check(guard.ledger.account("b1", "paper"), 50_000)
+    assert not eligible
+    assert any("observed" in msg for msg in missing)
+    assert any("verified trades" in msg for msg in missing)
+
+
+def test_missing_forward_sessions_or_long_outages_block_graduation(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    _make_graduate(conn, guard, clock, "b1")
+    acc = guard.ledger.account("b1", "paper")
+    assert trader.graduation_check(acc, md.price)[0]
+    # Even with 25 closed trades, missing sessions invalidate the sample.
+    conn.execute("DELETE FROM paper_observations WHERE account_id=? AND hour < ?",
+                 (acc["account_id"], (clock.t - 10 * DAY) // H))
+    conn.commit()
+    ok, reasons = trader.graduation_check(acc, md.price)
+    assert not ok and any("observed" in m or "paper days" in m for m in reasons)
+
+
+def test_stale_paper_data_never_triggers_graduation(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    _make_graduate(conn, guard, clock, "b1")
+    md.stale = True
+    clock.t += H
+    report = trader.tick()
+    assert not report.healthy
+    assert conn.execute("SELECT status FROM deployed_bots WHERE bot_id='b1'").fetchone()[0] == "paper"
+    assert any("recent validated" in m for m in trader.graduation_check(
+        guard.ledger.account("b1", "paper"), md.price)[1])
