@@ -52,6 +52,15 @@ def validate_performance(metrics: dict, gate: dict, prefix: str) -> list[str]:
     return reasons
 
 
+def rules_hash(config: dict) -> str:
+    frozen = {
+        "backtest": config["backtest"], "execution": config.get("execution", {}),
+        "gate": config["evolution"].get("gate", {}),
+        "protocol": PROTOCOL_VERSION,
+    }
+    return hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest()
+
+
 def seal(config: dict, splits, series, genome) -> dict:
     """Audit fingerprint of the exact unseen candles and execution rules.
 
@@ -63,12 +72,7 @@ def seal(config: dict, splits, series, genome) -> dict:
     digest = hashlib.sha256()
     for item in (series.ts, series.open, series.high, series.low, series.close, series.volume):
         digest.update(np.ascontiguousarray(item[a:b]).tobytes())
-    frozen = {
-        "backtest": config["backtest"], "execution": config.get("execution", {}),
-        "gate": config["evolution"].get("gate", {}),
-        "protocol": PROTOCOL_VERSION,
-    }
-    rule_digest = hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest()
+    rule_digest = rules_hash(config)
     return {
         "protocol": PROTOCOL_VERSION,
         "pair": genome.pair, "timeframe": genome.timeframe,
