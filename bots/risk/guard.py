@@ -28,9 +28,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from bots.config import PROJECT_DIR
+from bots.live.reconcile import ReconciliationError, reconcile_live_orders
 from bots.risk.ledger import DAY_MS, Ledger
 from bots.risk.state import (CRASH_LOCK, DAILY_HALT_UNTIL, ENTRY_HALT, KILL_SWITCH, LIVE_EPOCH,
-                             OWNER_PAUSE,
+                             LIVE_RECON_HALT, OWNER_PAUSE,
                              RiskState, now_ms)
 
 HARD_CAPITAL_CEILING_USD = 100.0
@@ -137,6 +138,8 @@ def resolve_mode(cfg: dict, env: dict, confirm_path: Path, state: RiskState,
         reasons.append(f"kill switch active: {state.get(KILL_SWITCH)}")
     if state.is_set(CRASH_LOCK):
         reasons.append(f"waiting for owner after unclean restart: {state.get(CRASH_LOCK)}")
+    if state.is_set(LIVE_RECON_HALT):
+        reasons.append(f"live exchange reconciliation locked: {state.get(LIVE_RECON_HALT)}")
     if not live_exchange_ready:
         reasons.append("no verified live exchange connection")
     return ModeDecision("LIVE" if not reasons else "PAPER", reasons)
@@ -191,6 +194,22 @@ class RiskGuard:
     @property
     def has_live_exchange(self) -> bool:
         return self._live is not None
+
+    def verify_live_orders(self) -> dict:
+        """Live preflight: remote exposure must match local protected orders.
+
+        A mismatch is sticky and owner-reviewed. A subsequent successful
+        query alone MUST NOT silently clear a previous reconciliation lock.
+        """
+        try:
+            result = reconcile_live_orders(self._live, self.ledger,
+                                           self.cfg["data"]["pairs"])
+        except ReconciliationError as exc:
+            self.state.set(LIVE_RECON_HALT, str(exc))
+            self._event("live_reconciliation_halt",
+                        "Live entries locked: " + str(exc), kind="critical")
+            raise OrderRefused("live exchange reconciliation failed: " + str(exc)) from exc
+        return result
 
     def live_epoch(self) -> int:
         return int(self.state.get(LIVE_EPOCH, "1"))
@@ -316,6 +335,7 @@ class RiskGuard:
             raise OrderRefused("daily loss limit reached")
         if total <= -risk["total_drawdown_kill_usd"]:
             raise OrderRefused("total drawdown kill level reached")
+        self.verify_live_orders()
         free = (self._live.fetch_balance().get("free") or {}).get("USD", 0.0) or 0.0
         if cost > free:
             raise OrderRefused(f"exchange free USD ${free:.2f} below cost ${cost:.2f}")
@@ -447,6 +467,15 @@ class RiskGuard:
             if pnl is not None:
                 return pnl  # the stop already sold the position
             self._cancel(mode, acc["stop_order_id"], pair)
+            # The protective stop could fill during the cancellation request.
+            # Verify its final state BEFORE placing another sell order.
+            if mode == "live":
+                confirmed = self._exchange(mode).fetch_order(acc["stop_order_id"], pair)
+                if confirmed.get("status") == "closed":
+                    return self.sync_stop(bot_id, mode)
+                if confirmed.get("status") not in ("canceled", "expired", "rejected"):
+                    self.state.set(LIVE_RECON_HALT, "uncertain stop cancellation for " + bot_id)
+                    raise OrderFailed("stop cancellation remains unconfirmed")
             self.ledger.set_stop_order(acc["account_id"], None)
             acc = self.ledger.by_id(acc["account_id"])
         order = self.place_order(OrderRequest(bot_id, mode, pair, "sell", acc["qty"],
@@ -481,7 +510,11 @@ class RiskGuard:
         try:
             self._exchange(mode).cancel_order(order_id, pair)
         except Exception as e:  # noqa: BLE001
-            self._event("cancel_failed", f"cancel {order_id} on {pair}: {e}")
+            self._event("cancel_failed", f"cancel {order_id} on {pair}: {e}",
+                        kind="critical" if mode == "live" else "risk")
+            if mode == "live":
+                self.state.set(LIVE_RECON_HALT, "failed cancellation for " + pair)
+                raise OrderFailed("cannot verify cancellation of live order") from e
 
     def _settle(self, mode: str, order: dict, pair: str, side: str) -> tuple[float, float, float]:
         """Wait for a market order to fill and return (qty, average price, fee)."""
@@ -520,6 +553,10 @@ class RiskGuard:
         """Give an approved bot real money, within every cap. None if not allowed now."""
         decision = self.mode()
         if decision.mode != "LIVE":
+            return None
+        try:
+            self.verify_live_orders()
+        except OrderRefused:
             return None
         risk = self.cfg["risk"]
         live = self.ledger.active("live")
@@ -596,6 +633,15 @@ class RiskGuard:
                 f"LIVE_CONFIRMED.revoked-{self.clock()}.txt"))
         self.close_all("live", f"kill switch: {reason}")
         for acc in self.ledger.active("live"):
+            latest = self.ledger.by_id(acc["account_id"])
+            # Do NOT erase ledger evidence of an unsettled live position.
+            # An uncertain sell/stop must be reconciled and handled manually.
+            if latest["qty"] > 0 or latest["pending_order_id"]:
+                self.state.set(LIVE_RECON_HALT, "unsettled live exposure after emergency shutdown")
+                self._event("live_exposure_unsettled",
+                            f"{acc['bot_id']} still has an unsettled exchange position/order",
+                            kind="critical")
+                continue
             self.ledger.close_account(acc["account_id"], self.clock())
             self._set_status(acc["bot_id"], "paper", f"kill switch: {reason}")
         self._event("kill_switch", f"KILL SWITCH: {reason}. All live positions closed, orders "
