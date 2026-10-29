@@ -14,15 +14,18 @@ import itertools
 import uuid
 
 from bots.risk.state import now_ms
+from bots.execution.model import market_fill_price
 
 
 class PaperExchange:
     id = "paper"
 
-    def __init__(self, fee: float, slippage: float, clock=now_ms, maker_fee: float | None = None):
+    def __init__(self, fee: float, slippage: float, clock=now_ms, maker_fee: float | None = None,
+                 spread_bps: float = 0.0):
         self.fee = fee
         self.maker_fee = fee if maker_fee is None else maker_fee
         self.slippage = slippage
+        self.spread_bps = spread_bps
         self.clock = clock
         self.prices: dict[str, float] = {}
         self.orders: dict[str, dict] = {}
@@ -40,7 +43,9 @@ class PaperExchange:
             if order["symbol"] != pair or order["status"] != "open":
                 continue
             if order["type"] == "limit":
-                if low <= order["price"]:
+                # OHLC lows may predate this two-minute order. Only a quote
+                # observed while the order exists can confirm a maker fill.
+                if price <= order["price"]:
                     self._fill(order, order["price"], maker=True)
                 continue
             stop = order["stopLossPrice"]
@@ -81,8 +86,8 @@ class PaperExchange:
         return dict(order)
 
     def _fill(self, order: dict, px: float, maker: bool = False) -> None:
-        if not maker:  # a resting order fills at its own price; a taker pays slippage
-            px = px * (1 + self.slippage) if order["side"] == "buy" else px * (1 - self.slippage)
+        if not maker:  # takers pay assumed half-spread and execution slippage
+            px = market_fill_price(px, order["side"], self.slippage, self.spread_bps)
         rate = self.maker_fee if maker else self.fee
         order.update(status="closed", filled=order["amount"], average=px,
                      fee={"cost": order["amount"] * px * rate, "currency": "USD"})
