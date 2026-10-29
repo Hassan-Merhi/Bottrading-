@@ -289,8 +289,13 @@ class Worker:
             if time.time() - self._market_refresh_at >= interval:
                 self._market_refresh_at = time.time()
                 self._market_refresh = self._spawn("update")
-        if not backfilling and self._evolution is None and self._market_refresh is None and (
-                self._due("evolution", w["evolution_hour_utc"]) or self._evolution_retry_due()):
+        # Evolution must not train on stale history or a failed public feed.
+        health = market_health(self.conn, self.cfg)
+        if (not backfilling and self._evolution is None and self._market_refresh is None
+                and health["healthy"] and not health["last_errors"]
+                and not self.state.get("market_refresh_process_error")
+                and (self._due("evolution", w["evolution_hour_utc"])
+                     or self._evolution_retry_due())):
             self.start_evolution()
 
     def _enforce_market_health(self) -> None:
