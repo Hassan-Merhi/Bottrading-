@@ -337,6 +337,7 @@ def test_limit_entry_rests_fills_and_times_out_through_the_guard(setup, monkeypa
     assert paper.fetch_order(list(paper.orders)[-1])["status"] == "canceled"
     # An exit signal while the entry rests withdraws it (timeout set long enough to see it).
     cfg["execution"]["limit_timeout_s"] = 10 * 3600
+    paper.limit_timeout_ms = 10 * 3600 * 1000
     clock.t += H
     signals["entry"] = True
     trader.tick()
