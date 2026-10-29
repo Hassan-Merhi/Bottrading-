@@ -68,6 +68,10 @@ def evidence(conn: sqlite3.Connection, account_id: int, now: int) -> dict:
         "COALESCE(SUM(CASE WHEN side='sell' THEN pnl ELSE 0 END),0) "
         "FROM fills WHERE account_id=? AND mode='paper' AND ts<=?",
         (account_id, now)).fetchone()
+    hours = [int(r[0]) for r in conn.execute(
+        "SELECT hour FROM paper_observations WHERE account_id=? AND ts<=? ORDER BY hour",
+        (account_id, now))]
+    max_gap = max((right - left for left, right in zip(hours, hours[1:])), default=0)
     buys, sells, fees, gross_wins, gross_losses, realized = fills
     count = min(int(buys or 0), int(sells or 0))
     factor = min(gross_wins / gross_losses, 100.0) if gross_losses > 0 else (
@@ -75,6 +79,7 @@ def evidence(conn: sqlite3.Connection, account_id: int, now: int) -> dict:
     return {
         "observed_days": int(row["days"] or 0),
         "observed_hours": int(row["samples"] or 0),
+        "max_observation_gap_hours": max_gap,
         "first_observation_ms": row["first_ms"],
         "last_observation_ms": row["last_ms"],
         "verified_trades": count,
