@@ -168,6 +168,24 @@ pilot:
   max_live_loss_usd: 2                   # kill the pilot at $2 total simulated/marked live loss
   max_live_drawdown_pct: 5               # demote pilot bot sooner than the standard 10%
 
+# ---------------------------------------------------------------------------
+# Phase 8: independently assess true live results before MANUAL capital review.
+# Review is read-only; this software never allocates or scales funds itself.
+# No shortcut based on backtest or paper profits, ever.
+# ---------------------------------------------------------------------------
+scaling:
+  enabled: false                        # no capital scaling in current deployment
+  owner_signoff: false                  # independent, later owner authorization
+  max_total_capital_usd: 0              # cannot exceed app-wide $100 ceiling
+  min_live_days: 60                     # real elapsed time AND witnessed equity-span
+  min_observed_days: 45
+  max_unobserved_days: 3
+  min_live_trades: 30                   # reconciled REAL closed round trips
+  min_profit_factor: 1.20
+  min_net_return_pct: 5                 # actual net return, after actual recorded fees
+  max_drawdown_pct: 5
+  must_beat_hold: true
+
 risk:
   max_total_capital_usd: 0               # 0 = paper only. Hard ceiling in code: 100
   max_per_bot_usd: 20

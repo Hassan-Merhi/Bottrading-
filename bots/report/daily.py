@@ -70,7 +70,7 @@ def summary(conn: sqlite3.Connection, now: int) -> dict:
     }
 
 
-def daily_report_text(conn: sqlite3.Connection, now: int) -> str:
+def daily_report_text(conn: sqlite3.Connection, now: int, cfg: dict | None = None) -> str:
     s = summary(conn, now)
     lines = [f"Daily report — mode {s['mode']}",
              f"Paper: {s['paper_bots']} bots, P&L {s['paper_pnl']:+.2f} USD "
@@ -84,6 +84,20 @@ def daily_report_text(conn: sqlite3.Connection, now: int) -> str:
                      f"fees ${a['fees']:.2f}, "
                      f"realized P&L ${a['realized_pnl']:+.2f}. "
                      "Simulated, not guaranteed.")
+    if cfg is not None:
+        from bots.live.scale import scale_review
+        review = scale_review(conn, cfg, now)
+        lines.append(
+            f"Real-money scaling: {review['status']}, "
+            f"{review['live_accounts']} eligible-to-measure live accounts, "
+            "automatic allocation increase $0.")
+        for a in review["live_evidence"]:
+            lines.append(f"Live evidence {a['bot_id']}: {a['observed_live_days']} observed days, "
+                         f"{a['closed_roundtrips']} real closed trades, "
+                         f"net return {a['net_return']:+.1%} " if a["net_return"] is not None
+                         else f"Live evidence {a['bot_id']}: no fresh valuation.")
+        if review["review_blockers"]:
+            lines.append("Scaling blocked: " + review["review_blockers"][0])
     if s["best"]:
         b = s["best"]
         lines.append(f"Best bot: {b['bot_id']} ({b['mode']}) {b['pnl'] / b['allocation']:+.1%}")

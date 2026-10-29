@@ -286,7 +286,7 @@ class Worker:
         if acfg.get("enabled") and self._due("digest", acfg["hour_utc"]):
             self._spawn("digest")  # sends its own Telegram message
         if self._due("report", w["daily_report_hour_utc"]):
-            self.alerter.alert(daily_report_text(self.conn, now_ms()), kind="report")
+            self.alerter.alert(daily_report_text(self.conn, now_ms(), self.cfg), kind="report")
         if self._due("backup", w["backup_hour_utc"]):
             try:
                 backup_database(self.db_path, resolve_path(w["backups_dir"]), w["backups_keep"])

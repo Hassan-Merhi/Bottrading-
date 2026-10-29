@@ -61,6 +61,25 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Phase 8: evaluate real profits before any manual scaling
+
+Phase 8 adds an independent **read-only** real-money performance review.
+Only confirmed live-account fills, daily equity marks, persistent
+Phase 7 certification, actual fees and fresh market prices count; paper
+and historical results never pass as live profits. The review looks for
+60+ elapsed live days, 45+ observed equity days, 30+ completed real
+trades, positive net results after costs, risk limits and net
+outperformance of passive holding. The API is
+`/api/scaling/readiness`; the dashboard and Telegram daily reports
+show the same readiness and blockers. **Nothing scales automatically.**
+
+The scaling configuration is OFF, owner scaling signoff is OFF, the
+scaling capital limit is **$0**, and the earlier PAPER-only
+configuration remains unchanged. Phase 7 has not produced a live
+pilot or profitable strategy yet, so the operational part of Phase 8
+is **not** demonstrated and must await new real results and owner
+approval. See [Phase 8 operating rules](docs/phase8-live-scaling.md).
+
 ## Phase 7: controlled pilot admission — disabled until separate authorization
 
 The first funded pilot is **not launched**. The deployed configuration
