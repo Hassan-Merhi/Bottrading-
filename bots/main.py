@@ -167,7 +167,7 @@ def cmd_report(cfg, conn, args) -> None:
     from bots.report.daily import daily_report_text
     from bots.risk.state import now_ms
 
-    print(daily_report_text(conn, now_ms()))
+    print(daily_report_text(conn, now_ms(), cfg))
 
 
 def cmd_digest(cfg, conn, args) -> None:
