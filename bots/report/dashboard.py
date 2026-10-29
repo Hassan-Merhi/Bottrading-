@@ -371,6 +371,24 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         finally:
             conn.close()
 
+    @app.get("/api/paper/{bot_id}/history")
+    def paper_history(bot_id: str, limit: int = 168):
+        conn = db()
+        try:
+            row = conn.execute(
+                "SELECT account_id FROM accounts WHERE bot_id=? AND mode='paper' "
+                "ORDER BY account_id DESC LIMIT 1", (bot_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, "unknown paper bot")
+            size = max(1, min(int(limit), 720))
+            return JSONResponse({
+                "bot_id": bot_id, "mode": "paper", "simulation": True,
+                "evidence": evidence(conn, row["account_id"], now_ms()),
+                "observations": history(conn, row["account_id"], size),
+            })
+        finally:
+            conn.close()
+
     @app.post("/bots/{bot_id}/{action}")
     def decide(bot_id: str, action: str, token: str = Form("")):
         check_token(token)
