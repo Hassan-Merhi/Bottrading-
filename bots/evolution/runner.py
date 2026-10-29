@@ -325,6 +325,20 @@ class EvolutionRun:
         """Why a bot may be a lucky point: fragile to small changes, or trades that look like chance."""
         gate = self.ecfg.get("gate") or {}
         reasons = []
+        # Cheapest hard failure first: avoid running up to eight expensive
+        # neighbouring backtests for a strategy that lacks enough real fills
+        # or whose net trade returns already fail the statistical gate.
+        t_min = float(gate.get("min_trade_tstat", 0))
+        if t_min > 0:
+            rets = self._trade_returns(g, (self.splits.start, self.splits.train_end))
+            need = int(gate.get("min_tstat_trades", 10))
+            if len(rets) < need:
+                return [f"only {len(rets)} trades over the train period (need {need} to judge)"]
+            sd = float(rets.std(ddof=1))
+            t = float(rets.mean() / sd * np.sqrt(len(rets))) if sd > 0 else 0.0
+            if not np.isfinite(t) or t < t_min:
+                return [f"trade results not distinguishable from chance "
+                        f"(t={t:.1f} over {len(rets)} trades, need {t_min:g})"]
         n = int(gate.get("neighbours", 0))
         if n > 0:
             variants = self._neighbours(g, n, float(gate.get("neighbour_scale", 0.1)))
@@ -334,18 +348,6 @@ class EvolutionRun:
                 if share < float(gate.get("neighbour_min_profitable", 0)):
                     reasons.append(f"fragile: only {ok} of {len(variants)} nearby variants made "
                                    "money (a lucky setting, not an edge)")
-        t_min = float(gate.get("min_trade_tstat", 0))
-        if t_min > 0:
-            rets = self._trade_returns(g, (self.splits.start, self.splits.train_end))
-            need = int(gate.get("min_tstat_trades", 10))
-            if len(rets) < need:
-                reasons.append(f"only {len(rets)} trades over the train period (need {need} to judge)")
-            else:
-                sd = float(rets.std(ddof=1))
-                t = float(rets.mean() / sd * np.sqrt(len(rets))) if sd > 0 else 0.0
-                if t < t_min:
-                    reasons.append(f"trade results not distinguishable from chance "
-                                   f"(t={t:.1f} over {len(rets)} trades, need {t_min:g})")
         return reasons
 
     def _test_verdict(self, test: dict) -> list[str]:
