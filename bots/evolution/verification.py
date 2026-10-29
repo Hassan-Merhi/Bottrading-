@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 
@@ -58,7 +59,14 @@ def rules_hash(config: dict) -> str:
         "gate": config["evolution"].get("gate", {}),
         "protocol": PROTOCOL_VERSION,
     }
-    return hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps(frozen, sort_keys=True).encode())
+    bot_dir = Path(__file__).resolve().parents[1]
+    for path in ("backtest/engine.py", "execution/model.py", "strategy/signals.py",
+                 "strategy/context.py", "strategy/indicators.py", "evolution/runner.py",
+                 "evolution/verification.py", "data/loader.py"):
+        digest.update(path.encode())
+        digest.update((bot_dir / path).read_bytes())
+    return digest.hexdigest()
 
 
 def seal(config: dict, splits, series, genome) -> dict:
