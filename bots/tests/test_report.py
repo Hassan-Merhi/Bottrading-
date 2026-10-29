@@ -182,3 +182,18 @@ def test_forward_paper_evidence_endpoint_and_status(dash):
     page = client.get("/").text
     assert "Forward paper verification" in page
     assert "Distinct market days" in page
+
+
+def test_pilot_readiness_is_read_only_and_unfunded(dash):
+    client, db = dash
+    response = client.get("/api/pilot/readiness")
+    assert response.status_code == 200
+    pilot = response.json()
+    assert pilot["enabled"] is False
+    assert pilot["allocated_live_usd"] == 0
+    assert pilot["live_accounts"] == 0
+    assert pilot["configuration_blockers"]
+    assert pilot["profitability_proven"] is False
+    assert client.get("/api/status").json()["pilot"]["enabled"] is False
+    page = client.get("/").text
+    assert "Controlled live pilot" in page and "OFF — PAPER ONLY" in page
