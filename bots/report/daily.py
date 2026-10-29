@@ -6,6 +6,7 @@ import sqlite3
 from collections import Counter
 
 from bots.risk.ledger import DAY_MS
+from bots.paper.forward import evidence
 from bots.risk.state import LAST_MODE, RiskState
 
 
@@ -40,8 +41,21 @@ def summary(conn: sqlite3.Connection, now: int) -> dict:
     every = paper + live_active
     best = max(every, key=lambda a: a["pnl"] / a["allocation"], default=None)
     state = RiskState(conn)
+    forward = []
+    for a in paper:
+        ev = evidence(conn, a["account_id"], now)
+        forward.append({"bot_id": a["bot_id"],
+                        "observed_days": ev["observed_days"],
+                        "observed_hours": ev["observed_hours"],
+                        "max_observation_gap_hours": ev["max_observation_gap_hours"],
+                        "verified_trades": ev["verified_trades"],
+                        "profit_factor": ev["profit_factor"],
+                        "realized_pnl": ev["realized_pnl"],
+                        "fees": ev["fees"],
+                        "last_observation_ms": ev["last_observation_ms"]})
     return {
         "mode": state.get(LAST_MODE, "PAPER"),
+        "paper_forward": forward,
         "paper_pnl": sum(a["pnl"] for a in paper),
         "paper_pnl_today": sum(a["pnl_today"] for a in paper),
         "paper_bots": len(paper),
@@ -63,6 +77,13 @@ def daily_report_text(conn: sqlite3.Connection, now: int) -> str:
              f"(today {s['paper_pnl_today']:+.2f})",
              f"Live: {s['live_bots']} bots, P&L {s['live_pnl']:+.2f} USD "
              f"(today {s['live_pnl_today']:+.2f}), protected funds {s['protected']:.2f} USD"]
+    for a in s["paper_forward"]:
+        lines.append(f"Forward {a['bot_id']}: {a['observed_days']} observed days, "
+                     f"{a['verified_trades']} settled trades, "
+                     f"profit factor {a['profit_factor']:.2f}, "
+                     f"fees ${a['fees']:.2f}, "
+                     f"realized P&L ${a['realized_pnl']:+.2f}. "
+                     "Simulated, not guaranteed.")
     if s["best"]:
         b = s["best"]
         lines.append(f"Best bot: {b['bot_id']} ({b['mode']}) {b['pnl'] / b['allocation']:+.1%}")

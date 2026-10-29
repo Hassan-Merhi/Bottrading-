@@ -134,6 +134,23 @@ CREATE TABLE IF NOT EXISTS equity_history (   -- one mark per account per UTC da
     PRIMARY KEY (account_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS paper_observations (
+    account_id INTEGER NOT NULL,
+    hour INTEGER NOT NULL,                -- UTC epoch-hour; real quote observed in that hour
+    ts INTEGER NOT NULL,
+    price REAL NOT NULL,
+    equity REAL NOT NULL,
+    hold_return REAL,
+    fees REAL NOT NULL,
+    closed_trades INTEGER NOT NULL,
+    max_drawdown REAL NOT NULL,
+    PRIMARY KEY (account_id, hour),
+    FOREIGN KEY (account_id) REFERENCES accounts(account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_observations_account_ts
+    ON paper_observations(account_id, ts);
+
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL,

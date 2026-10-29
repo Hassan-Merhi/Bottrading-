@@ -157,3 +157,28 @@ def test_telegram_sends_files_and_passes_full_commands(tmp_path):
     seen = []
     tg.poll(lambda *a: "x", lambda text: seen.append(text) or "ok")
     assert seen == ["/kill confirm"]
+
+
+def test_forward_paper_evidence_endpoint_and_status(dash):
+    client, db = dash
+    conn = connect(db)
+    add_bot(conn, "p5", "paper")
+    conn.execute("INSERT INTO accounts (bot_id, mode, active, epoch, allocation, cash, "
+                 "peak_equity, last_equity, day_start_equity, started_at, hold_start_price) "
+                 "VALUES ('p5','paper',1,1,20,20,20,20,20,1793000000000,50000)")
+    conn.commit()
+    a = conn.execute("SELECT * FROM accounts WHERE bot_id='p5'").fetchone()
+    from bots.paper.forward import observe
+    cfg = __import__("bots.config", fromlist=["load_config"]).load_config()
+    assert observe(conn, a, 50_000, a["started_at"], cfg)
+    conn.close()
+    detail = client.get("/api/paper/p5/history").json()
+    assert detail["simulation"] is True and detail["mode"] == "paper"
+    assert detail["evidence"]["observed_days"] == 1
+    assert len(detail["observations"]) == 1
+    assert client.get("/api/paper/missing/history").status_code == 404
+    status = client.get("/api/status").json()
+    assert any(x["bot_id"] == "p5" for x in status["paper_forward"])
+    page = client.get("/").text
+    assert "Forward paper verification" in page
+    assert "Distinct market days" in page

@@ -26,6 +26,7 @@ from bots.data.mood import latest_fear_greed
 from bots.data.store import get_meta
 from bots.db import connect
 from bots.paper.trader import decide_graduation
+from bots.paper.forward import evidence, net_hold_return, history
 from bots.report.daily import account_rows, summary
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
@@ -370,6 +371,24 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         finally:
             conn.close()
 
+    @app.get("/api/paper/{bot_id}/history")
+    def paper_history(bot_id: str, limit: int = 168):
+        conn = db()
+        try:
+            row = conn.execute(
+                "SELECT account_id FROM accounts WHERE bot_id=? AND mode='paper' "
+                "ORDER BY account_id DESC LIMIT 1", (bot_id,)).fetchone()
+            if row is None:
+                raise HTTPException(404, "unknown paper bot")
+            size = max(1, min(int(limit), 720))
+            return JSONResponse({
+                "bot_id": bot_id, "mode": "paper", "simulation": True,
+                "evidence": evidence(conn, row["account_id"], now_ms()),
+                "observations": history(conn, row["account_id"], size),
+            })
+        finally:
+            conn.close()
+
     @app.post("/bots/{bot_id}/{action}")
     def decide(bot_id: str, action: str, token: str = Form("")):
         check_token(token)
@@ -420,16 +439,22 @@ def _latest_price(conn, pair: str, timeframe: str) -> float | None:
     return float(row[0]) if row else None
 
 
-def _gate_progress(a: dict, cfg: dict, price: float | None, now: int) -> str:
-    """The five graduation checks as progress bars."""
+def _gate_progress(a: dict, cfg: dict, price: float | None, now: int,
+                   conn=None) -> str:
+    """Transparent paper verification progress from stored observations and fills."""
     g = cfg["graduation"]
-    bt = cfg["backtest"]
-    days = (now - a["started_at"]) / DAY_MS
-    ret = a["pnl"] / a["allocation"]
-    hold = None
-    if a.get("hold_start_price") and price:
-        fee, slip = bt["taker_fee_pct"] / 100, bt["slippage_pct"] / 100
-        hold = price * (1 - slip) * (1 - fee) / (a["hold_start_price"] * (1 + slip) * (1 + fee)) - 1
+    days = max(0.0, (now - a["started_at"]) / DAY_MS)
+    ret = a["pnl"] / a["allocation"] if a["allocation"] else 0.0
+    hold = net_hold_return(a.get("hold_start_price"), price, cfg)
+    ev = evidence(conn, a["account_id"], now) if conn else {}
+    observed = ev.get("observed_days", 0)
+    verified = ev.get("verified_trades", 0)
+    factor = ev.get("profit_factor", 0.0)
+    first = ev.get("first_observation_ms")
+    span = max(0.0, (now - first) / DAY_MS) if first is not None else 0.0
+    gap_hours = ev.get("max_observation_gap_hours", 0)
+    last = ev.get("last_observation_ms")
+    fresh = last is not None and 0 <= now - last <= max(180_000, cfg["worker"]["poll_seconds"] * 3000)
     dd_limit = g["max_paper_drawdown_pct"] / 100
 
     def bar(label, frac, value, done, failed=False):
@@ -440,23 +465,35 @@ def _gate_progress(a: dict, cfg: dict, price: float | None, now: int) -> str:
                 f'<span class="v">{value}</span></div>')
 
     rows = [
-        bar("Days in paper", days / g["min_paper_days"], f'{days:.0f} / {g["min_paper_days"]}',
-            days >= g["min_paper_days"]),
-        bar("Trades", a["trades"] / g["min_paper_trades"], f'{a["trades"]} / {g["min_paper_trades"]}',
-            a["trades"] >= g["min_paper_trades"]),
-        bar("Profit after fees", 1 if ret > 0 else 0, f"{ret * 100:+.1f}%", ret > 0,
-            failed=ret <= 0 and a["trades"] > 0),
-        bar("Drawdown under " + f'{g["max_paper_drawdown_pct"]}%', a["max_drawdown"] / dd_limit,
-            f'{a["max_drawdown"] * 100:.1f}%', a["max_drawdown"] < dd_limit,
-            failed=a["max_drawdown"] >= dd_limit),
+        bar("Live-observed paper span", min(days, span) / g["min_paper_days"],
+            f'{min(days, span):.1f} / {g["min_paper_days"]}d',
+            min(days, span) >= g["min_paper_days"]),
+        bar("Distinct market days", observed / g["min_observed_days"],
+            f'{observed} / {g["min_observed_days"]}', observed >= g["min_observed_days"]),
+        bar("Verified round trips", verified / g["min_paper_trades"],
+            f'{verified} / {g["min_paper_trades"]}', verified >= g["min_paper_trades"]),
+        bar("After-fee paper return", 1 if ret > 0 else 0,
+            f"{ret * 100:+.1f}%", ret > 0, failed=ret <= 0 and verified > 0),
+        bar("Profit factor", factor / g["min_paper_profit_factor"],
+            f'{factor:.2f} / {g["min_paper_profit_factor"]:g}',
+            factor >= g["min_paper_profit_factor"]),
+        bar("Max drawdown", 1 if a["max_drawdown"] < dd_limit else 0,
+            f'{a["max_drawdown"] * 100:.1f}% (limit {g["max_paper_drawdown_pct"]}%)',
+            a["max_drawdown"] < dd_limit, failed=a["max_drawdown"] >= dd_limit),
+        bar("Recent verified quote", 1 if fresh else 0,
+            "current" if fresh else "missing / stale", fresh, failed=not fresh),
+        bar("Longest observation gap", 1 if gap_hours <= g["max_observation_gap_hours"] else 0,
+            f'{gap_hours}h / {g["max_observation_gap_hours"]}h',
+            gap_hours <= g["max_observation_gap_hours"], failed=gap_hours > g["max_observation_gap_hours"]),
     ]
     if g.get("must_beat_hold"):
         if hold is None:
-            rows.append(bar("Beats holding coin", 0, "n/a", False))
+            rows.append(bar("Beats net holding", 0, "n/a", False))
         else:
-            rows.append(bar("Beats holding coin", 1 if ret > hold else 0,
+            rows.append(bar("Beats net holding", 1 if ret > hold else 0,
                             f"{(ret - hold) * 100:+.1f}%", ret > hold, failed=ret <= hold))
-    return '<div class="gate"><div class="title">Graduation progress</div>' + "".join(rows) + "</div>"
+    return ('<div class="gate"><div class="title">Forward paper verification</div>' +
+            "".join(rows) + "</div>")
 
 
 def _sparkline(conn, a: dict, now: int) -> str:
@@ -514,8 +551,14 @@ def _bot_card(a: dict, cfg: dict, conn, now: int, mode: str, extra: str = "") ->
             + (f' · protected ${a["protected"]:.2f}' if a["protected"] else "") + '</div>')
     gate = ""
     if mode == "paper" and status == "paper":
-        gate = _gate_progress(a, cfg, _latest_price(conn, g.pair, cfg["data"]["base_timeframe"]), now)
+        gate = _gate_progress(
+            a, cfg, _latest_price(conn, g.pair, cfg["data"]["base_timeframe"]), now, conn)
     spark = _sparkline(conn, a, now) if a.get("account_id") is not None else ""
+    if mode == "paper" and a.get("account_id") is not None:
+        observations = history(conn, a["account_id"], limit=1)
+        last = observations[-1] if observations else None
+        fee_text = f' · paid ${last["fees"]:.2f} simulated fees' if last else ''
+        meta += f'<div class="help" style="margin:0 0 8px">Verified snapshots: {evidence(conn, a["account_id"], now)["observed_hours"]} hours{fee_text}</div>'
     return (f'<div class="bot"><div class="head"><span class="id">{escape(a["bot_id"])}</span>'
             f'{pos_badge}<span class="badge {badge[0]}">{badge[1]}</span></div>'
             f'<div class="strategy">{escape(g.describe())}</div>{stats}{meta}{spark}{gate}{extra}</div>')
@@ -621,8 +664,9 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
          f'passed ({cand.get("test_failed", 0)} failed). Only bots that made money in every '
          'training window get this one-time check; passed bots wait for a paper slot.'),
         ("", "3 · Paper trading", f'{counts.get("paper", 0)} / {cfg["paper"]["max_bots"]}',
-         f'slots in use. Needs {cfg["graduation"]["min_paper_days"]}+ days, '
-         f'{cfg["graduation"]["min_paper_trades"]}+ trades, profit, low drawdown.'),
+         f'slots in use. Needs {cfg["graduation"]["min_paper_days"]}+ calendar days, '
+         f'{cfg["graduation"]["min_observed_days"]} observed days, '
+         f'{cfg["graduation"]["min_paper_trades"]}+ settled trades, profit, low drawdown.'),
         ("hot" if waiting_n else "", "4 · Your approval", f'{waiting_n}',
          'waiting for you' if waiting_n else 'nothing waiting. You get a Telegram alert.'),
         ("live", "5 · Live", f'{counts.get("live", 0)} / {risk["max_live_bots"]}',
@@ -789,8 +833,9 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
             ["live_enabled in config", "yes" if cfg.get("live_enabled") is True else "no"]])
         + '<h2 style="margin-top:16px">How to read this page</h2><div class="how">'
         '<div><b>Paper mode</b>Fake money at real prices. Every bot starts here.</div>'
-        '<div><b>Graduation</b>A paper bot asks for your approval after 30+ days, 20+ trades, profit '
-        'after fees, drawdown under 10%, and beating "just hold the coin".</div>'
+        '<div><b>Graduation</b>A paper bot needs 30+ real days, at least 21 observed UTC '
+        'market days, 20 settled trades, profit after fees, profit factor at least 1.1, '
+        'drawdown under 10%, no long data gaps, and better returns than net buy-and-hold.</div>'
         '<div><b>Drawdown</b>The worst drop from a bot\'s peak equity. Smaller is safer.</div>'
         '<div><b>ATR stop</b>Some bots place their stop a multiple of the recent average candle '
         'range (ATR) below entry, so it widens in wild markets and tightens in calm ones. It is '

@@ -23,6 +23,7 @@ from bots.data.fetch import TIMEFRAME_MS
 from bots.data.loader import Series, series_from_df
 from bots.data.store import upsert_candles
 from bots.evolution.graveyard import Graveyard
+from bots.paper.forward import evidence, net_hold_return, observe
 from bots.risk.guard import OrderFailed, OrderRefused, RiskGuard
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import HEARTBEAT
@@ -245,7 +246,15 @@ class Trader:
         # Live bots keep being managed in PAPER mode (e.g. after a crash): exits and stops
         # still work, while the guard refuses their new entries until the owner confirms.
         self.guard.check_limits()
-        self._graduation(prices)
+        # Record only fresh, validated forward ticker prices, never create fake
+        # paper sessions by backfilling missed hours after a restart.
+        if report.healthy:
+            for bot in self.bots(PAPER_STATUSES):
+                price = prices.get(self.genome(bot).pair)
+                acc = self.guard.ledger.account(bot["bot_id"], "paper")
+                if acc is not None and price is not None:
+                    observe(self.conn, acc, price, now, self.cfg)
+        self._graduation(prices, allow_promotion=report.healthy)
         self._live_limits()
         self._activate_approved(prices)
         if report.healthy:
@@ -310,36 +319,58 @@ class Trader:
     # -- the pipeline gates ------------------------------------------------
 
     def paper_stats(self, acc, price: float | None) -> dict:
+        now = self.clock()
+        ev = evidence(self.conn, acc["account_id"], now)
+        ev["verified_trades"] = min(ev["verified_trades"], int(acc["trades"]))
         eq = self.guard.ledger.equity(acc, price)
         ret = eq / acc["allocation"] - 1
-        hold = None
-        if acc["hold_start_price"] and price:
-            cost = (1 + self.guard.slippage) * (1 + self.guard.fee)
-            hold = price * (1 - self.guard.slippage) * (1 - self.guard.fee) / \
-                (acc["hold_start_price"] * cost) - 1
-        return {"equity": eq, "return": ret, "hold_return": hold,
-                "days": (self.clock() - acc["started_at"]) / DAY_MS,
-                "max_drawdown": acc["max_drawdown"], "trades": acc["trades"]}
+        hold = net_hold_return(acc["hold_start_price"], price, self.cfg)
+        return {
+            "equity": eq, "return": ret, "hold_return": hold,
+            "days": max(0.0, (now - acc["started_at"]) / DAY_MS),
+            "observed_span_days": max(0.0, (now - ev["first_observation_ms"]) / DAY_MS)
+                                   if ev["first_observation_ms"] is not None else 0.0,
+            "max_drawdown": acc["max_drawdown"], "trades": acc["trades"], **ev,
+        }
 
     def graduation_check(self, acc, price: float | None) -> tuple[bool, list[str]]:
-        """Section 5 step 4: every condition except the owner's approval."""
+        """Require independent actual forward observations AND completed paper fills."""
         g = self.cfg["graduation"]
         st = self.paper_stats(acc, price)
         missing = []
-        if st["days"] < g["min_paper_days"]:
-            missing.append(f"{st['days']:.1f}/{g['min_paper_days']} paper days")
+        if st["days"] < g["min_paper_days"] or st["observed_span_days"] < g["min_paper_days"]:
+            missing.append(f"{min(st['days'], st['observed_span_days']):.1f}/"
+                           f"{g['min_paper_days']} paper days")
+        min_days = int(g.get("min_observed_days", 21))
+        if st["observed_days"] < min_days:
+            missing.append(f"{st['observed_days']}/{min_days} observed market days")
+        max_gap = int(g.get("max_observation_gap_hours", 72))
+        if st["max_observation_gap_hours"] > max_gap:
+            missing.append(f"observation gap {st['max_observation_gap_hours']}h exceeds "
+                           f"{max_gap}h")
+        age = (self.clock() - st["last_observation_ms"]
+               if st["last_observation_ms"] is not None else None)
+        if age is None or age > max(180_000, int(self.cfg["worker"]["poll_seconds"]) * 3000):
+            missing.append("no recent validated paper-market observation")
+        if price is None or not math.isfinite(price) or price <= 0:
+            missing.append("no current market price")
         if st["return"] <= 0:
             missing.append("not profitable after fees")
         if st["max_drawdown"] >= g["max_paper_drawdown_pct"] / 100:
             missing.append(f"drawdown {st['max_drawdown']:.1%} not under "
                            f"{g['max_paper_drawdown_pct']}%")
-        if st["trades"] < g["min_paper_trades"]:
-            missing.append(f"{st['trades']}/{g['min_paper_trades']} trades")
-        if g["must_beat_hold"] and (st["hold_return"] is None or st["return"] <= st["hold_return"]):
+        if st["verified_trades"] < g["min_paper_trades"]:
+            missing.append(f"{st['verified_trades']}/{g['min_paper_trades']} verified trades")
+        min_factor = float(g.get("min_paper_profit_factor", 1.1))
+        if st["profit_factor"] < min_factor:
+            missing.append(f"paper profit factor {st['profit_factor']:.2f} below "
+                           f"{min_factor:g}")
+        if g["must_beat_hold"] and (st["hold_return"] is None or
+                                   st["return"] <= st["hold_return"]):
             missing.append("did not beat holding the coin")
         return not missing, missing
 
-    def _graduation(self, prices: dict[str, float]) -> None:
+    def _graduation(self, prices: dict[str, float], allow_promotion: bool = True) -> None:
         for bot in self.bots(("paper",)):
             acc = self.guard.ledger.account(bot["bot_id"], "paper")
             if acc is None:
@@ -348,15 +379,21 @@ class Trader:
             if acc["max_drawdown"] > self.cfg["paper"]["retire_drawdown_pct"] / 100:
                 self._retire(bot, acc, price, f"paper drawdown {acc['max_drawdown']:.0%}")
                 continue
-            ok, _ = self.graduation_check(acc, price)
+            # Do not announce eligibility using an incomplete or stale API loop.
+            if not allow_promotion:
+                continue
+            ok, missing = self.graduation_check(acc, price)
             if ok:
-                self._set_status(bot["bot_id"], "ready_to_graduate", "passed the paper gate")
+                self._set_status(bot["bot_id"], "ready_to_graduate",
+                                 "passed verified forward paper gate")
                 st = self.paper_stats(acc, price)
                 self.alerter.alert(
                     f"Bot {bot['bot_id']} is ready to graduate: {self.genome(bot).describe()}. "
-                    f"Paper: {st['return']:+.1%} vs hold {st['hold_return']:+.1%}, "
-                    f"{st['trades']} trades, max drawdown {st['max_drawdown']:.1%} over "
-                    f"{st['days']:.0f} days. Live trading can lose money up to your caps.",
+                    f"Forward paper: {st['return']:+.1%} vs hold {st['hold_return']:+.1%}, "
+                    f"{st['verified_trades']} settled trades, {st['observed_days']} observed "
+                    f"days, profit factor {st['profit_factor']:.2f}, "
+                    f"drawdown {st['max_drawdown']:.1%}. "
+                    "This is simulated performance, not a guarantee of real-money profits.",
                     kind="graduation",
                     buttons=[("Approve", f"approve:{bot['bot_id']}"),
                              ("Decline", f"decline:{bot['bot_id']}")])

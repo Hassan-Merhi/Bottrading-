@@ -146,11 +146,30 @@ def test_bad_data_stops_new_entries(setup):
 
 
 def _make_graduate(conn, guard, clock, bot_id, equity=26.0, trades=25, dd=0.05, hold_price=None):
+    """Generate distinct witnessed daily quotes AND buy/sell fills, not forged counters."""
+    from bots.paper.forward import observe
     acc = guard.ledger.account(bot_id, "paper")
+    started = clock.t - 31 * DAY
     conn.execute("UPDATE accounts SET started_at=?, trades=?, cash=?, last_equity=?, "
                  "max_drawdown=?, peak_equity=?, hold_start_price=? WHERE account_id=?",
-                 (clock.t - 31 * DAY, trades, equity, equity, dd, equity,
+                 (started, trades, equity, equity, dd, equity,
                   hold_price or 50_000, acc["account_id"]))
+    conn.execute("DELETE FROM paper_observations WHERE account_id=?", (acc["account_id"],))
+    conn.execute("DELETE FROM fills WHERE account_id=?", (acc["account_id"],))
+    conn.commit()
+    acc = guard.ledger.account(bot_id, "paper")
+    for day in range(32):
+        observe(conn, acc, 50_000, started + day * DAY, guard.cfg)
+    for i in range(trades):
+        ts = started + (i + 1) * DAY
+        conn.execute("INSERT INTO fills "
+                     "(account_id,bot_id,mode,ts,pair,side,qty,price,fee,pnl,reason) "
+                     "VALUES (?,?,'paper',?,'BTC/USD','buy',1,100,0.01,NULL,'test')",
+                     (acc["account_id"], bot_id, ts))
+        conn.execute("INSERT INTO fills "
+                     "(account_id,bot_id,mode,ts,pair,side,qty,price,fee,pnl,reason) "
+                     "VALUES (?,?,'paper',?,'BTC/USD','sell',1,101,0.01,0.2,'test')",
+                     (acc["account_id"], bot_id, ts))
     conn.commit()
 
 
@@ -418,3 +437,46 @@ def test_legacy_unaudited_candidate_is_not_auto_deployed(setup):
     assert trader.deploy_candidates() == 0
     assert conn.execute("SELECT stage FROM candidates WHERE genome_hash=?",
                         (g.hash(),)).fetchone()[0] == "awaiting_paper"
+
+
+def test_backdated_account_without_observed_sessions_cannot_graduate(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    acc = guard.ledger.account("b1", "paper")
+    conn.execute("UPDATE accounts SET started_at=?, trades=25, cash=26, last_equity=26 "
+                 "WHERE account_id=?", (clock.t - 40 * DAY, acc["account_id"]))
+    conn.commit()
+    eligible, missing = trader.graduation_check(guard.ledger.account("b1", "paper"), 50_000)
+    assert not eligible
+    assert any("observed" in msg for msg in missing)
+    assert any("verified trades" in msg for msg in missing)
+
+
+def test_missing_forward_sessions_or_long_outages_block_graduation(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    _make_graduate(conn, guard, clock, "b1")
+    acc = guard.ledger.account("b1", "paper")
+    assert trader.graduation_check(acc, md.price)[0]
+    # Even with 25 closed trades, missing sessions invalidate the sample.
+    conn.execute("DELETE FROM paper_observations WHERE account_id=? AND hour < ?",
+                 (acc["account_id"], (clock.t - 10 * DAY) // H))
+    conn.commit()
+    ok, reasons = trader.graduation_check(acc, md.price)
+    assert not ok and any("observed" in m or "paper days" in m for m in reasons)
+
+
+def test_stale_paper_data_never_triggers_graduation(setup):
+    cfg, conn, guard, paper, kraken, alerts, clock, md, trader, signals = setup
+    add_bot(conn, "b1", "paper")
+    trader.tick()
+    _make_graduate(conn, guard, clock, "b1")
+    md.stale = True
+    clock.t += H
+    report = trader.tick()
+    assert not report.healthy
+    assert conn.execute("SELECT status FROM deployed_bots WHERE bot_id='b1'").fetchone()[0] == "paper"
+    assert any("recent validated" in m for m in trader.graduation_check(
+        guard.ledger.account("b1", "paper"), md.price)[1])

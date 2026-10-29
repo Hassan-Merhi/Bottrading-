@@ -61,6 +61,41 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Phase 5: forward paper trading and independent performance evidence
+
+A candidate with a valid Phase 4 audit automatically enters **PAPER** trading
+when a diverse paper slot is open and all public market feeds are healthy.
+The bot uses only simulated capital. The system stores actual witnessed
+quotes, simulated equity, after-fee buy/sell fills, drawdown, and buy-and-hold
+baseline snapshots in SQLite. Data is upserted at most once per UTC hour,
+survives process restarts, and is never retroactively filled for hours when the
+worker was offline.
+
+The paper graduation gate now requires ALL of these before an owner can
+consider unlocking real trading: 30 **actually elapsed** calendar days since
+account start AND first recorded market observation, >=21 distinct UTC days
+with witnessed market prices, no monitoring gap above 72 hours, a fresh validated
+price, >=20 reconciled completed buy/sell transactions (not a manually bumped
+trade counter), positive simulated P&L after fees, realized profit factor >=1.10,
+maximum drawdown below 10%, and outperformance of fee/spread/slippage-adjusted
+buy-and-hold. An API failure cannot produce a new forward observation or
+qualify a bot. A deep paper drawdown causes automatic retirement.
+
+The dashboard displays each paper bot's verified days, round trips, profit,
+fees, monitoring gap, and benchmark; Telegram daily reports include each
+paper bot's forward progress. Read-only endpoints:
+`/api/status` contains `paper_forward`; `/api/paper/{bot_id}/history`
+returns the last 168 hourly snapshots by default (up to 720).
+Simulated results are not actual exchange execution and **do not imply
+guaranteed or proven future profit**. If the Phase 4 gates produce zero
+candidates, there is nothing to forward-test: do not claim that 30 days have
+already passed or create fake sample trades to satisfy the gate.
+
+A paper graduation is just *eligible for owner review*; Phase 6 must harden
+real-money credentials, reconciliation, deployment and kill switches before
+any owner-authorized real trading. `live_enabled: false` and total permitted
+live capital of zero remain unchanged.
+
 ## Trader knowledge the bots can evolve to use
 
 Each is a gene, so evolution decides whether it helps. Every one must pass the
