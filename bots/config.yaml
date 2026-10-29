@@ -95,8 +95,25 @@ evolution:
     neighbour_min_profitable: 0.6        # at least this share of variants must make money on train data
     min_trade_tstat: 2.0                 # mean trade return / its standard error over the train period
     min_tstat_trades: 10                 # fewer trades than this cannot be judged and fail the gate
-    min_test_trades: 5                   # the unseen-data test must contain at least this many trades
-    max_test_drawdown_pct: 25            # and stay under this drawdown
+    # Phase 4: evidence-first verification, never an assurance of profit.
+    min_train_regimes: 2                 # at least two different historical market conditions
+    embargo_hours: 24                   # skip first day after validation/test split
+    min_validation_trades: 12           # meaningful sample of net filled trades
+    max_validation_drawdown_pct: 10      # risk limit before spending an unseen-data test
+    min_validation_profit_factor: 1.15  # after fees and both sides of the spread
+    min_validation_sharpe: 0.0
+    validation_subwindows: 3            # require consistency within validation, not only its total
+    min_positive_validation_windows: 2
+    require_cost_stress: true            # must survive more costly fills on validation only
+    stress_fee_multiplier: 1.25
+    stress_slippage_multiplier: 2
+    stress_spread_multiplier: 2
+    min_test_trades: 20                  # holdout evidence must include filled trades
+    max_test_drawdown_pct: 10            # meaningful protection from historical deep losses
+    min_test_profit_factor: 1.15
+    min_test_sharpe: 0.0
+    test_must_beat_hold: true            # after fees, outperform simply buying and holding
+    max_new_test_attempts_per_epoch: 5   # limit search overfitting of a repeated 30-day holdout epoch
 
 fitness:
   metric: sharpe                         # sharpe | calmar
