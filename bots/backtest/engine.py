@@ -2,11 +2,14 @@
 
 Rules that keep it honest:
 
-* No look-ahead. A signal at candle i (computed at its close) fills at the
-  open of candle i + 1. With limit entries (CostModel.entry_order), the buy
-  rests at that open and counts as filled only if the candle later trades
-  below it (low < open); it then pays the maker fee and no slippage. A candle
-  that never dips misses the entry, as a resting bid would.
+* No look-ahead. A signal at candle i is known only after that close. Market
+  entries execute at the next open. Limit buys use a prior-close bid proxy;
+  a later OHLC low does not prove a fill during a two-minute timeout. An
+  opening gap through the bid is charged as taker, and short-lived orders
+  with no time-resolved evidence are treated as unfilled.
+* Target and trailing exits are software-driven, not exchange-resident orders:
+  they require a closed-candle signal and execute at the following open.
+  Protective hard stops can execute intrabar and take priority when ambiguous.
 * Every trade has a stop-loss and a take-profit. The stop is a fixed percent
   or, for ATR-mode genomes, a per-candle distance decided at the signal candle
   (`stop_pct`). Both are checked inside
@@ -25,6 +28,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from bots.data.fetch import TIMEFRAME_MS
+from bots.execution.model import limit_fill_kind, market_fill_price
 from bots.data.loader import Series
 from bots.strategy.genome import Genome
 
@@ -40,6 +44,10 @@ class CostModel:
     min_cost: float
     maker_fee: float | None = None   # fraction for a resting limit entry; None = same as fee
     entry_order: str = "market"      # market | limit
+    spread_bps: float = 0.0           # assumed full bid/ask spread in basis points
+    limit_timeout_s: float = 120.0
+    limit_bid_offset_bps: float = 0.0  # prior-close proxy for a resting bid
+    trade_through_bps: float = 0.0    # require strict low-through for observable maker fill
 
     @property
     def entry_fee(self) -> float:
@@ -54,7 +62,12 @@ class CostModel:
                    starting_balance=float(bt_cfg["starting_balance_usd"]),
                    min_qty=float(mins["min_qty"]), min_cost=float(mins["min_cost_usd"]),
                    maker_fee=bt_cfg.get("maker_fee_pct", bt_cfg["taker_fee_pct"]) / 100,
-                   entry_order=execution.get("entry_order", "market"))
+                   entry_order=execution.get("entry_order", "market"),
+                   spread_bps=float(bt_cfg.get("spread_bps", 0)),
+                   limit_timeout_s=float(execution.get("limit_timeout_s", 120)),
+                   limit_bid_offset_bps=float(execution.get("limit_bid_offset_bps",
+                                                          bt_cfg.get("spread_bps", 0) / 2)),
+                   trade_through_bps=float(execution.get("limit_trade_through_bps", 0)))
 
 
 @dataclass
@@ -77,6 +90,7 @@ class Result:
     equity: np.ndarray      # mark-to-market at each candle close, candles start..end-1
     rejected_orders: int
     metrics: dict = field(default_factory=dict)
+    unfilled_limits: int = 0
 
 
 def _first_true(mask: np.ndarray) -> int:
@@ -101,6 +115,7 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
     equity = np.empty(n)
     trades: list[Trade] = []
     rejected = 0
+    unfilled_limits = 0
     if n < 2:
         equity[:] = cost.starting_balance
         return _finish(Result(start, end, trades, equity, rejected), s, cost)
@@ -130,13 +145,21 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
             continue
 
         if cost.entry_order == "limit":
-            if not l[j] < o[j]:  # the bid resting at the open was never hit
+            bid = c[i] * (1 - cost.limit_bid_offset_bps / 10_000.0)
+            kind = limit_fill_kind(o[j], l[j], bid, TIMEFRAME_MS[s.timeframe],
+                                   int(cost.limit_timeout_s * 1000),
+                                   cost.trade_through_bps)
+            if kind is None:
+                unfilled_limits += 1
                 ptr += 1
                 continue
-            fill = o[j]
+            # Limit orders never execute at a price worse than their limit.
+            # A gap-open through a bid is conservatively charged as taker.
+            fill = bid
+            fee_rate = cost.fee if kind == "taker" else cost.entry_fee
         else:
-            fill = o[j] * (1 + cost.slippage)
-        fee_rate = cost.entry_fee
+            fill = market_fill_price(o[j], "buy", cost.slippage, cost.spread_bps)
+            fee_rate = cost.fee
         notional = min(cash * size, cash / (1 + fee_rate))
         qty = notional / fill
         if notional < cost.min_cost or qty < cost.min_qty:
@@ -152,41 +175,49 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
 
         e = int(np.searchsorted(exits, j))
         sig = int(exits[e]) if e < len(exits) else None
-        k_time = j + hold_max if hold_max else None  # time exit fills at this candle's open
-        scan_end = min(sig + 1, end) if sig is not None else end
-        if k_time is not None:
-            scan_end = min(scan_end, k_time)
-        lows, highs = l[j:scan_end], h[j:scan_end]
-        if trail > 0 and len(highs) > 1:
-            # The trailing level at candle k uses highs up to k - 1: inside a candle the
-            # order of high and low is unknown, so the stop may not chase the same candle.
-            hh = np.maximum.accumulate(highs)
-            level = np.empty_like(lows)
-            level[0] = stop
-            level[1:] = np.maximum(stop, hh[:-1] * (1 - trail))
-        else:
-            level = None
-        k_sl = _first_true(lows <= (level if level is not None else stop))
-        k_tp = _first_true(highs >= target)
-        if k_sl >= 0 and (k_tp < 0 or k_sl <= k_tp):
-            k = j + k_sl
-            lvl = float(level[k_sl]) if level is not None else stop
-            px = min(lvl, o[k]) if k > j else lvl
-            reason = "trail" if lvl > stop else "stop"
-        elif k_tp >= 0:
-            k = j + k_tp
-            px, reason = target, "target"
-        elif k_time is not None and k_time < end and (sig is None or k_time <= sig + 1):
-            k = k_time
-            px, reason = o[k], "time"
-        elif sig is not None and sig + 1 < end:
-            k = sig + 1
-            px, reason = o[k], "signal"
-        else:
-            k = end - 1
-            px, reason = c[k], "end"
+        k_time = j + hold_max if hold_max else None
 
-        exit_fill = px * (1 - cost.slippage)
+        # Stops are the only exchange-resident exit simulated intrabar. All
+        # software exits (target, trailing, signal, time) execute only after
+        # their triggering information is actually available to the worker.
+        stop_end = min(end, k_time) if k_time is not None else end
+        if sig is not None:
+            stop_end = min(stop_end, sig + 1)
+        lows = l[j:stop_end]
+        k_stop_offset = _first_true(lows <= stop)
+        candidates: list[tuple[int, int, float, str]] = [
+            (end - 1, 9, float(c[end - 1]), "end")]
+        if k_stop_offset >= 0:
+            ks = j + k_stop_offset
+            level = min(stop, o[ks]) if ks > j else stop
+            candidates.append((ks, 2, float(level), "stop"))
+        if k_time is not None and k_time < end:
+            candidates.append((k_time, 0, float(o[k_time]), "time"))
+        if sig is not None and sig + 1 < end:
+            candidates.append((sig + 1, 0, float(o[sig + 1]), "signal"))
+
+        # An observed candle HIGH cannot trigger a software target; the
+        # worker only observes quotes periodically. Require close >= target
+        # and execute at the following open (including a possible gap).
+        scan_end = min(end - 1, stop_end)
+        if scan_end > j:
+            close_segment = c[j:scan_end]
+            target_offset = _first_true(close_segment >= target)
+            if target_offset >= 0:
+                kt = j + target_offset + 1
+                candidates.append((kt, 0, float(o[kt]), "target"))
+
+            if trail > 0 and len(close_segment) > 1:
+                # Use only known closes, not an intrabar high whose timing
+                # relative to a low is unknowable from OHLC.
+                highs_seen = np.maximum.accumulate(close_segment)
+                trail_levels = np.maximum(stop, highs_seen[:-1] * (1 - trail))
+                trail_offset = _first_true(close_segment[1:] <= trail_levels)
+                if trail_offset >= 0:
+                    kt = j + trail_offset + 2
+                    candidates.append((kt, 0, float(o[kt]), "trail"))
+        k, _, px, reason = min(candidates, key=lambda item: (item[0], item[1]))
+        exit_fill = market_fill_price(px, "sell", cost.slippage, cost.spread_bps)
         proceeds = qty * exit_fill
         fee_out = proceeds * cost.fee
         equity[j - start:k - start] = cash + qty * c[j:k]
@@ -199,13 +230,15 @@ def run_backtest(s: Series, entries: np.ndarray, exits: np.ndarray, g: Genome,
         ptr = int(np.searchsorted(entries, earliest_fill - 1))
 
     equity[filled_to - start:] = cash
-    return _finish(Result(start, end, trades, equity, rejected), s, cost)
+    return _finish(Result(start, end, trades, equity, rejected, unfilled_limits=unfilled_limits),
+                   s, cost)
 
 
 def hold_return(s: Series, start: int, end: int, cost: CostModel) -> float:
     """Return of buying at the first open and selling at the last close, after costs."""
-    buy = s.open[start] * (1 + cost.slippage) * (1 + cost.fee)
-    sell = s.close[end - 1] * (1 - cost.slippage) * (1 - cost.fee)
+    buy = market_fill_price(s.open[start], "buy", cost.slippage, cost.spread_bps) * (1 + cost.fee)
+    sell = market_fill_price(s.close[end - 1], "sell", cost.slippage,
+                             cost.spread_bps) * (1 - cost.fee)
     return sell / buy - 1
 
 
@@ -241,6 +274,7 @@ def _finish(r: Result, s: Series, cost: CostModel) -> Result:
         "fees_paid": float(sum(tr.fees for tr in t)),
         "gross_pnl": float(sum(tr.pnl + tr.fees for tr in t)),
         "rejected_orders": r.rejected_orders,
+        "unfilled_limit_orders": r.unfilled_limits,
         "exposure": float(sum(tr.exit_idx - tr.entry_idx + 1 for tr in t) / max(len(eq), 1)),
         "hold_return": float(hold_return(s, r.start, r.end, cost)) if r.end - r.start >= 2 else 0.0,
     }
