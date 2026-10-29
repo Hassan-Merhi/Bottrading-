@@ -17,7 +17,8 @@ HOUR_MS = 3_600_000
 
 
 def net_hold_return(start: float | None, end: float | None, cfg: dict) -> float | None:
-    if not start or not end or start <= 0 or end <= 0:
+    if (start is None or end is None or not math.isfinite(start)
+            or not math.isfinite(end) or start <= 0 or end <= 0):
         return None
     bt = cfg["backtest"]
     slippage = float(bt["slippage_pct"]) / 100
