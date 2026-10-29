@@ -414,10 +414,42 @@ class RiskGuard:
                                                        order_type="stop_loss", stop_price=stop,
                                                        reason="protective stop"))
             self.ledger.set_stop_order(acc["account_id"], str(stop_order["id"]))
+            if mode == "live":
+                self.verify_protective_stop(bot_id)
         except (OrderRefused, OrderFailed) as e:
             self._event("stop_failed", f"{bot_id} {mode} {pair}: stop could not be placed ({e}); "
                                        "closing the position now", kind="critical")
             self.exit_long(bot_id, mode, "stop could not be placed")
+
+    def verify_protective_stop(self, bot_id: str) -> bool:
+        """Read-back check of independently resting Kraken stop, no trade actions."""
+        acc = self.ledger.account(bot_id, "live")
+        if acc is None or acc["qty"] <= 0:
+            return True
+        try:
+            if not acc["stop_order_id"]:
+                raise ValueError("missing stop order ID")
+            order = self._live.fetch_order(acc["stop_order_id"], self._pair(bot_id))
+            trigger = (order.get("stopLossPrice") or order.get("stopPrice")
+                       or order.get("triggerPrice"))
+            status = order.get("status")
+            if (order.get("side") != "sell" or status not in ("open", "closed")
+                    or not trigger or not math.isfinite(float(trigger))
+                    or abs(float(trigger) - float(acc["stop_price"])) >
+                    max(1e-6, abs(float(acc["stop_price"])) * 0.001)):
+                raise ValueError("stop side, trigger or status cannot be verified")
+            if status == "open":
+                size = float(order.get("remaining") if order.get("remaining") is not None
+                             else order.get("amount") or 0)
+                if size + 1e-10 < acc["qty"]:
+                    raise ValueError("protective stop covers less than current holding")
+            return True
+        except Exception as exc:
+            self.state.set(LIVE_RECON_HALT, "protective stop not verified for " + bot_id)
+            self._event("protective_stop_unverified",
+                        f"{bot_id}: Kraken stop must be reconciled before live resumes",
+                        kind="critical")
+            return False
 
     def sync_pending(self, bot_id: str, mode: str) -> str:
         """Finish or cancel a resting limit entry. Returns filled | open | cancelled | none."""
