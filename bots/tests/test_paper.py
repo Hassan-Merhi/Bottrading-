@@ -292,7 +292,7 @@ def test_paper_exchange_limit_buy_rests_then_fills_at_the_maker_fee():
     assert o["status"] == "open" and o["filled"] == 0
     ex.update_price("BTC/USD", 99.5, low=99.2)
     assert ex.fetch_order(o["id"])["status"] == "open"
-    ex.update_price("BTC/USD", 99.5, low=98.9)
+    ex.update_price("BTC/USD", 98.9, low=98.8)  # now the observed quote actually crosses the bid
     f = ex.fetch_order(o["id"])
     assert f["status"] == "closed" and f["average"] == 99.0 and f["fee"]["cost"] == pytest.approx(2 * 99 * 0.004)
     taker = ex.create_order("BTC/USD", "limit", "buy", 1.0, 120.0)  # already below the limit
@@ -314,7 +314,7 @@ def test_limit_entry_rests_fills_and_times_out_through_the_guard(setup, monkeypa
     assert acc["qty"] == 0 and acc["pending_order_id"] and acc["pending_price"] == pytest.approx(50_000 * 0.998)
     signals["entry"] = False
     clock.t += 30_000
-    md.price, md.low = 49_950, 49_850  # traded below the bid: the resting order fills
+    md.price, md.low = 49_850, None  # observed quote crosses bid after order submission
     trader.tick()
     acc = guard.ledger.account("b1", "paper")
     assert acc["qty"] > 0 and acc["pending_order_id"] is None and acc["stop_order_id"]
