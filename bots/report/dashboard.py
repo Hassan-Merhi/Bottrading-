@@ -27,6 +27,7 @@ from bots.data.store import get_meta
 from bots.db import connect
 from bots.paper.trader import decide_graduation
 from bots.paper.forward import evidence, net_hold_return, history
+from bots.live.pilot import pilot_status
 from bots.report.daily import account_rows, summary
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
@@ -367,7 +368,16 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             s["flags"] = {k: st.get(k) for k in (KILL_SWITCH, CRASH_LOCK, ENTRY_HALT,
                                                  DAILY_HALT_UNTIL, HEARTBEAT)}
             s["market_data"] = market_health(conn, cfg)
+            s["pilot"] = pilot_status(conn, cfg, now_ms())
             return JSONResponse(json.loads(json.dumps(s, default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/api/pilot/readiness")
+    def pilot_readiness():
+        conn = db()
+        try:
+            return JSONResponse(pilot_status(conn, cfg, now_ms()))
         finally:
             conn.close()
 
@@ -673,6 +683,17 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
          f'bots with real money, at most ${risk["max_per_bot_usd"]} each'
          if mode == "LIVE" else 'locked while in paper mode'),
     ]
+    p_status = pilot_status(conn, cfg, now)
+    blockers = "; ".join(p_status["configuration_blockers"]) or "pilot switches configured"
+    parts.append('<section id="pilot"><h2>Controlled live pilot</h2>'
+                 '<p class="help">No real-money pilot may start without 30+ days of genuine '
+                 'forward paper trading, independent Kraken validation, and your separate '
+                 'funding approval. Software readiness is not profit evidence.</p>'
+                 f'<div class="notice"><b>{"OFF — PAPER ONLY" if not p_status["enabled"] else "Pilot configured"}</b>'
+                 f' · live accounts: {p_status["live_accounts"]}'
+                 f' · allocated: ${p_status["allocated_live_usd"]:.2f}'
+                 f' · blockers: {escape(blockers)}</div></section>')
+
     parts.append('<section id="pipeline"><h2>How a bot gets to real money</h2>'
                  '<p class="help">Every bot must pass each stage in order. Losers are retired at '
                  'every step and their cause of death is recorded so new bots avoid it.</p>'
