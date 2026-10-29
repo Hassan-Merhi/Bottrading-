@@ -138,6 +138,7 @@ paper:
 
 worker:
   poll_seconds: 60                       # trading loop interval
+  market_refresh_seconds: 300           # refresh every listed pair independently every 5 min
   evolution_hour_utc: 2                  # nightly evolution
   daily_report_hour_utc: 8
   backup_hour_utc: 3
