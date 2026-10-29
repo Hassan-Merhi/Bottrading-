@@ -81,6 +81,11 @@ def live_cfg(cfg, capital=60):
     cfg["live_enabled"] = True
     cfg["risk"].update(max_total_capital_usd=capital, max_per_bot_usd=20, max_live_bots=3,
                        daily_loss_limit_usd=3, total_drawdown_kill_usd=10)
+    # Existing isolated risk/stop tests exercise simulated live order mechanics,
+    # NOT Phase 7 candidate graduation. New Phase 7 tests keep this gate ON.
+    cfg["pilot"].update(enabled=True, owner_signoff=True, exchange_signoff=True,
+                        max_bots=3, max_total_capital_usd=capital,
+                        max_per_bot_usd=20, require_qualified_paper=False)
     return cfg
 
 
