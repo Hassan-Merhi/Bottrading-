@@ -1,3 +1,4 @@
+import copy
 import json
 
 import pytest
@@ -276,3 +277,26 @@ def test_report_warns_when_most_bots_cannot_trade(conn, cfg, synthetic_market):
     assert note and "90%" in note and note in short_summary(result) and note in render(result, conn)
     last["starved"] = 0.1
     assert starvation_note(result) is None
+
+
+def test_position_sizes_clear_each_coins_minimum_order(conn, cfg, synthetic_market):
+    from bots.evolution.runner import MIN_ORDER_HEADROOM, min_order_size_floors
+    bt = copy.deepcopy(cfg["backtest"])
+    bt["min_order"]["BTC/USD"]["min_qty"] = 0.0002  # ~$6-8 at the synthetic price: qty decides
+    end = max(int(s.ts[-1]) for s in synthetic_market.values()) + 1
+    floors = min_order_size_floors(synthetic_market, bt, end)
+    btc = synthetic_market[("BTC/USD", "1h")]
+    need = max(bt["min_order"]["BTC/USD"]["min_qty"] * btc.close.max(),
+               bt["min_order"]["BTC/USD"]["min_cost_usd"])
+    assert floors["BTC/USD"] == pytest.approx(
+        min(100.0, 100 * need * MIN_ORDER_HEADROOM / bt["starting_balance_usd"]))
+    # Prices after the cut-off (the test period) never shape the search.
+    cut = int(btc.ts[len(btc) // 2])
+    early = min_order_size_floors(synthetic_market, bt, cut)["BTC/USD"]
+    assert btc.close[btc.ts >= cut].max() > btc.close[btc.ts < cut].max()
+    assert early < floors["BTC/USD"]
+
+    run = EvolutionRun(conn, small_cfg(cfg), synthetic_market, "synthetic", log=lambda _: None)
+    born = [run._newcomer() for _ in range(100)]
+    born += [run._offspring(born[:10]) for _ in range(100)]
+    assert all(g.position_size_pct >= run.size_floors[g.pair] - 1e-3 for g in born)
