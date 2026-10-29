@@ -61,6 +61,28 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Phase 6: fail-closed live infrastructure (no live activation)
+
+This phase prepares **only** the safety infrastructure. The production default
+is still `MODE=PAPER`, `live_enabled: false`, and **$0** authorized live capital.
+No candidate has yet completed the independent forward-paper qualification.
+
+Before live exposure, RiskGuard queries Kraken for every open exchange order
+and verifies each is accounted for by a recorded entry or protective stop.
+Untracked orders, missing stops, ambiguous API results and uncertain stop
+cancellations cause a persistent `live_reconciliation_halt` lock. Kill
+handling retains unsettled positions instead of falsely writing them off;
+stops are read back after placement. Read-only CLI:
+`python -m bots.main audit-live`. Explicit owner-only acknowledgment after
+the order book has been reconciled:
+`python -m bots.main audit-live --acknowledge`. Neither command places
+orders or overrides the separate live-capital confirmation gates.
+
+See [Phase 6 safety and recovery runbook](docs/phase6-live-safety-runbook.md)
+for credential privileges, operational response and the additional
+**real Kraken API / asset reconciliation** work required before a funded pilot.
+Passing CI with a simulated Kraken connector is not proof of live readiness.
+
 ## Phase 5: forward paper trading and independent performance evidence
 
 A candidate with a valid Phase 4 audit automatically enters **PAPER** trading

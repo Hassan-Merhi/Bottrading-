@@ -11,6 +11,7 @@ RUNNING = "running"                      # set while a worker runs, cleared on c
 DAILY_HALT_UNTIL = "daily_halt_until"    # ms; live entries blocked until then
 ENTRY_HALT = "entry_halt"                # fail-safe: API errors / bad data block new entries
 OWNER_PAUSE = "owner_pause"              # the owner said /pause: no new entries until /resume
+LIVE_RECON_HALT = "live_reconciliation_halt"  # persisted until manual read-only verified reset
 LIVE_EPOCH = "live_epoch"                # bumps on each owner confirmation
 LAST_MODE = "last_mode"
 HEARTBEAT = "heartbeat"                  # ms of the last completed trading loop
