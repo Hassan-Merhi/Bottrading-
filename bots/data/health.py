@@ -28,12 +28,22 @@ def market_health(conn, cfg: dict, clock_ms: int | None = None) -> dict[str, Any
         found = candle_range(conn, pair, tf)
         last = found[1] if found else None
         age = now - (last + step) if last is not None else None
+        # Inspect the last 24 hours of base candles; a gap changes derived
+        # 1h/4h signals and cannot be silently treated as continuous data.
+        recent = [int(row[0]) for row in conn.execute(
+            "SELECT ts FROM candles WHERE pair=? AND timeframe=? AND ts>=? "
+            "ORDER BY ts", (pair, tf, now - 24 * 3_600_000))]
+        gaps = sum(max(0, (later - earlier) // step - 1)
+                   for earlier, later in zip(recent, recent[1:]))
         # Future-dated records and absent candles are never healthy.
         fresh = age is not None and -step <= age <= max_age
+        status = ("missing" if last is None else
+                  "stale" if not fresh else "gapped" if gaps else "fresh")
         pairs[pair] = {
-            "status": "fresh" if fresh else ("missing" if last is None else "stale"),
+            "status": status,
             "last_candle_ms": last,
             "age_minutes": round(max(age, 0) / 60_000, 1) if age is not None else None,
+            "recent_missing_candles": gaps,
             "count": found[2] if found else 0,
         }
     unhealthy = [pair for pair, detail in pairs.items() if detail["status"] != "fresh"]
