@@ -155,6 +155,20 @@ class Worker:
                                    limit_timeout_s=self.cfg.get("execution", {}).get(
                                        "limit_timeout_s", 120))
         self.guard = RiskGuard(self.cfg, self.conn, self.paper, live, self.alerter, self.env)
+        if self.guard.ledger.active("live") or (
+                live is not None and self.cfg.get("live_enabled") is True):
+            if live is None:
+                from bots.risk.state import LIVE_RECON_HALT
+                self.state.set(LIVE_RECON_HALT, "existing live exposure without verified Kraken key")
+                self.alerter.alert("Unverified live exposure: no authenticated Kraken connection. "
+                                   "Live entries remain locked.", kind="critical")
+            else:
+                try:
+                    self.guard.verify_live_orders()
+                except Exception:
+                    # Fail closed; positions and their ledger evidence remain
+                    # available for explicit reconciliation rather than discarded.
+                    pass
         md = self._market_data or ReadOnlyExchange(make_exchange(self.cfg["data"]["exchange"]))
         self.trader = Trader(self.cfg, self.conn, self.guard, md, self.paper, self.alerter)
         self.trader.restore_paper_stops()
