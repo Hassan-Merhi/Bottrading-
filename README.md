@@ -90,6 +90,42 @@ same backtest, unseen-data check and 30-day paper gate as any other rule.
 All of these only look at days that have fully closed, so a backtest never
 sees the future (tests check this).
 
+## Phase 2: conservative execution simulation
+
+Backtest results now use explicit Kraken-tier maker/taker fees, assumed full spread
+(`backtest.spread_bps`, default 10 basis points), and slippage, with both market
+price and paper fills using `bots.execution.model.market_fill_price`. These are
+**assumptions**, not measured Kraken order-book execution costs. Widen them for
+stress tests rather than treating any one backtest return as guaranteed.
+
+- A limit buy is priced at a *known* prior-candle close minus the configured
+  `execution.limit_bid_offset_bps`. A two-minute resting buy is **not** assumed
+  to have filled just because a 15-minute, 1-hour, or 4-hour candle touched
+  its price at some unknown later time. An opening cross is charged the **taker**
+  rate, and a maker fill requires time resolution no coarser than the timeout.
+  Unconfirmable orders are counted in `unfilled_limit_orders`. This approach
+  is intentionally conservative and can undercount genuine fills.
+- Stop losses represent hard exchange-resident orders and can trigger
+  intrabar; a gap through the level exits at the worse opening price.
+  Targets and trailing signals are software-managed in this system. Historical
+  testing therefore requires a close-price trigger and a sale at the following
+  open rather than granting a fill at an unobserved intrabar high.
+- Paper trading no longer reuses old OHLC lows to fill newly entered orders.
+  It requires an observed executable quote to cross the resting buy, respects
+  the limit price and expiration, and includes the same assumed spread and
+  slippage for market fills. Historical backtests, paper fills, and real
+  exchange fills still differ in latency, depth, queue position, gaps and
+  partial fills. Do not describe this as tick-level or order-book replay.
+- The risk guard sizes market buys using spread plus slippage and reserves
+  taker fees; limit buys reserve the full bid and taker fee, so paper orders
+  cannot silently overspend the bot's allocation. All live capital permissions
+  and confirmation requirements are unchanged.
+
+For materially stronger claims about fill quality, record or source timestamped
+quotes/trades (ideally order-book depth) and replay the exact placement,
+two-minute timeouts, partial fills and cancellation acknowledgments.
+Validation against real future paper execution remains required.
+
 ## The gate before paper trading
 
 Evolution scores every bot on walk-forward windows of the training period.
