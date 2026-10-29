@@ -124,7 +124,8 @@ fitness:
   max_drawdown_pct: 15                   # penalty above this
   drawdown_penalty: 5.0                  # per unit of drawdown above the limit
   min_trades: 20                         # penalty below this
-  trades_penalty: 1.0                    # scaled by the shortfall fraction
+  trades_penalty: 3.0                    # scaled by the shortfall fraction. At 1.0, fees made
+                                         # trading rarely the best score and evolution starved
   hold_penalty: 0.5                      # scaled by fraction of windows that failed to beat holding
   losing_window_penalty: 0.75            # steer search toward profit in all train windows
   unfilled_limit_penalty: 0.35           # don't reward unverified short-lived limit fills
