@@ -9,7 +9,8 @@ database_path: bots/data/bots.db
 # ---------------------------------------------------------------------------
 data:
   exchange: kraken
-  pairs: [BTC/USD, ETH/USD, SOL/USD, XRP/USD, LINK/USD, ADA/USD, DOGE/USD]  # liquid pairs whitelist
+  pairs: [BTC/USD, ETH/USD, SOL/USD, XRP/USD, LINK/USD, ADA/USD, DOGE/USD,
+          NEAR/USD, LTC/USD, SUI/USD, AAVE/USD, UNI/USD, AVAX/USD, XLM/USD]  # liquid pairs whitelist
   timeframes: [15m, 1h, 4h]
   base_timeframe: 15m                    # stored; 1h and 4h are resampled from it
   history_years: 3                       # how far back to backfill (2–4)
@@ -43,6 +44,14 @@ backtest:
     LINK/USD: {min_qty: 0.2, min_cost_usd: 5}
     ADA/USD: {min_qty: 10, min_cost_usd: 5}
     DOGE/USD: {min_qty: 20, min_cost_usd: 5}
+    # Kraken's own ordermin (Oct 2026); cost kept at the strict $5 used above.
+    NEAR/USD: {min_qty: 1, min_cost_usd: 5}
+    LTC/USD: {min_qty: 0.08, min_cost_usd: 5}
+    SUI/USD: {min_qty: 5, min_cost_usd: 5}
+    AAVE/USD: {min_qty: 0.03, min_cost_usd: 5}
+    UNI/USD: {min_qty: 0.7, min_cost_usd: 5}
+    AVAX/USD: {min_qty: 0.5, min_cost_usd: 5}
+    XLM/USD: {min_qty: 25, min_cost_usd: 5}
 
 # ---------------------------------------------------------------------------
 # Order execution (backtest, paper and live use the same rule)

@@ -10,7 +10,8 @@ import json
 import random
 from dataclasses import asdict, dataclass, fields
 
-PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "LINK/USD", "ADA/USD", "DOGE/USD")
+PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "LINK/USD", "ADA/USD", "DOGE/USD",
+         "NEAR/USD", "LTC/USD", "SUI/USD", "AAVE/USD", "UNI/USD", "AVAX/USD", "XLM/USD")
 TIMEFRAMES = ("15m", "1h", "4h")
 ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd", "volume_spike",
                "squeeze_breakout")
