@@ -157,13 +157,18 @@ def _pick_timeframe(rng: random.Random, timeframes) -> str:
     return rng.choices(options, [TIMEFRAME_WEIGHTS.get(tf, 1.0) for tf in options])[0]
 
 
-def _apply_search_floors(v: dict) -> dict:
+def _apply_search_floors(v: dict, size_floors: dict[str, float] | None = None) -> dict:
+    """Raise genes to their search floors. `size_floors` maps a pair to the
+    position size (% of the allocation) its exchange minimum order needs."""
     for name, floor in SEARCH_FLOORS.items():
         v[name] = max(v[name], floor)
+    if size_floors:
+        v["position_size_pct"] = max(v["position_size_pct"], size_floors.get(v["pair"], 0.0))
     return v
 
 
-def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Genome:
+def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES,
+                  size_floors: dict[str, float] | None = None) -> Genome:
     v: dict = {
         "pair": rng.choice(tuple(pairs)),
         "timeframe": _pick_timeframe(rng, timeframes),
@@ -180,11 +185,12 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Gen
         v["trail_pct"] = 0.0
     if rng.random() < 0.5:  # half hold until stop, target or exit signal
         v["max_hold_candles"] = 0
-    return repair(_apply_search_floors(v))
+    return repair(_apply_search_floors(v, size_floors))
 
 
 def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10,
-           categorical_rate: float = 0.05, pairs=PAIRS, timeframes=TIMEFRAMES) -> Genome:
+           categorical_rate: float = 0.05, pairs=PAIRS, timeframes=TIMEFRAMES,
+           size_floors: dict[str, float] | None = None) -> Genome:
     """Small random changes: numeric genes move by about ±scale of their value."""
     v = g.to_dict()
     options = {"pair": tuple(pairs), "timeframe": tuple(timeframes), "entry_type": ENTRY_TYPES,
@@ -201,7 +207,7 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
             if is_int and abs(step) < 1:
                 step = rng.choice((-1, 1))
             v[name] = v[name] + step
-    return repair(_apply_search_floors(v))
+    return repair(_apply_search_floors(v, size_floors))
 
 
 def crossover(a: Genome, b: Genome, rng: random.Random) -> Genome:

@@ -37,6 +37,32 @@ from bots.strategy.genome import (ATR_GENES, NUMERIC_GENES, Genome, crossover, m
 
 _worker_evaluator: Evaluator | None = None
 
+# Room above the exchange minimum, so a bot can still place orders after its
+# balance has fallen by about a fifth.
+MIN_ORDER_HEADROOM = 1.25
+
+
+def min_order_size_floors(market: dict[tuple[str, str], Series], bt_cfg: dict,
+                          until_ms: int) -> dict[str, float]:
+    """Smallest position size (% of the starting balance) per pair whose order
+    clears the exchange minimum at the highest price seen before `until_ms`.
+
+    Below it every order is refused once the coin gets expensive, so the bot
+    trades in training and goes silent on validation. Only data before the
+    test period is used, so the unseen holdout stays unseen.
+    """
+    balance = float(bt_cfg["starting_balance_usd"])
+    floors: dict[str, float] = {}
+    for (pair, _), s in market.items():
+        mins = bt_cfg["min_order"].get(pair)
+        seen = s.close[s.ts < until_ms]
+        if mins is None or balance <= 0 or not len(seen):
+            continue
+        need = max(float(mins["min_qty"]) * float(seen.max()), float(mins["min_cost_usd"]))
+        pct = min(100.0, 100.0 * need * MIN_ORDER_HEADROOM / balance)
+        floors[pair] = max(floors.get(pair, 0.0), pct)
+    return floors
+
 
 def _init_worker(market, windows_ms, cfg, ctx) -> None:
     global _worker_evaluator
@@ -107,6 +133,8 @@ class EvolutionRun:
         split = self.ecfg["split"]
         self.splits = make_splits(market, split["train"], split["validation"])
         self.windows_ms = self.splits.windows(self.ecfg["walk_forward_windows"])
+        self.size_floors = min_order_size_floors(market, cfg["backtest"],
+                                                 self.splits.validation_end)
         self.graveyard = Graveyard(conn, cfg["graveyard"])
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         self._evaluated: dict[Genome, Evaluation] = {}
@@ -114,13 +142,15 @@ class EvolutionRun:
     # -- birth -------------------------------------------------------------
 
     def _newcomer(self) -> Genome:
-        return self._born(lambda: random_genome(self.rng, self.pairs, self.timeframes))
+        return self._born(lambda: random_genome(self.rng, self.pairs, self.timeframes,
+                                                 size_floors=self.size_floors))
 
     def _offspring(self, parents: list[Genome]) -> Genome:
         def make() -> Genome:
             a, b = self.rng.sample(parents, 2) if len(parents) > 1 else (parents[0], parents[0])
             return mutate(crossover(a, b, self.rng), self.rng, self.ecfg["mutation_rate"],
-                          self.ecfg["mutation_scale"], pairs=self.pairs, timeframes=self.timeframes)
+                          self.ecfg["mutation_scale"], pairs=self.pairs, timeframes=self.timeframes,
+                          size_floors=self.size_floors)
         return self._born(make)
 
     def _born(self, make: Callable[[], Genome], tries: int = 10) -> Genome:

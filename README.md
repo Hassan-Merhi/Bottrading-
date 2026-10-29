@@ -356,9 +356,13 @@ no disk. Leave the Kraken keys unset while paper trading.
   (`execution.entry_order: market`) and every exit is a market order, so a
   round trip costs about 1.8% with spread and slippage. That is why most
   strategies die, and why evolution only searches stops of 1.5%+, targets of
-  3%+, positions of 30%+ of the allocation (so a $20 bot clears the $5
-  minimum), and favours 1h/4h candles over 15m (`SEARCH_FLOORS` and
-  `TIMEFRAME_WEIGHTS` in `bots/strategy/genome.py`).
+  3%+ and positions of 30%+ of the allocation, and favours 1h/4h candles over
+  15m (`SEARCH_FLOORS` and `TIMEFRAME_WEIGHTS` in `bots/strategy/genome.py`).
+  Each coin also gets its own position-size floor, so a $20 bot's order clears
+  that coin's `min_order` (quantity x the highest price before the test period,
+  plus 25% headroom): about 80% for BTC and ADA, 60% for ETH and DOGE. Without
+  it, bots that trade in training get every order refused once the coin is
+  more expensive (`min_order_size_floors` in `bots/evolution/runner.py`).
 - Limit entries (`execution.entry_order: limit`) rest at the bid for the
   maker rate, but are off by default: crypto candles open at the previous
   close, so on 15m+ bars the backtest can almost never prove a fill (0% on
