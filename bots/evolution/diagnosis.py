@@ -39,12 +39,15 @@ def diagnose(window_metrics: list[dict], regime: str, min_trades: int) -> str:
     """Pick the clearest reason for poor performance, judged across all windows."""
     n_trades = sum(m["n_trades"] for m in window_metrics)
     rejected = sum(m["rejected_orders"] for m in window_metrics)
+    unverified = sum(m.get("unfilled_limit_orders", 0) for m in window_metrics)
     stops = sum(m["stop_outs"] for m in window_metrics)
     fees = sum(m["fees_paid"] for m in window_metrics)
     gross = sum(m["gross_pnl"] for m in window_metrics)
     total = float(np.prod([1 + m["total_return"] for m in window_metrics]) - 1)
     hold = float(np.prod([1 + m["hold_return"] for m in window_metrics]) - 1)
 
+    if n_trades == 0 and unverified > 0:
+        return "limit fills unverified at candle resolution"
     if n_trades == 0 and rejected > 0:
         return "orders below exchange minimum (position too small)"
     if n_trades < min_trades:
