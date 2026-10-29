@@ -146,11 +146,30 @@ def test_bad_data_stops_new_entries(setup):
 
 
 def _make_graduate(conn, guard, clock, bot_id, equity=26.0, trades=25, dd=0.05, hold_price=None):
+    """Generate distinct witnessed daily quotes AND buy/sell fills, not forged counters."""
+    from bots.paper.forward import observe
     acc = guard.ledger.account(bot_id, "paper")
+    started = clock.t - 31 * DAY
     conn.execute("UPDATE accounts SET started_at=?, trades=?, cash=?, last_equity=?, "
                  "max_drawdown=?, peak_equity=?, hold_start_price=? WHERE account_id=?",
-                 (clock.t - 31 * DAY, trades, equity, equity, dd, equity,
+                 (started, trades, equity, equity, dd, equity,
                   hold_price or 50_000, acc["account_id"]))
+    conn.execute("DELETE FROM paper_observations WHERE account_id=?", (acc["account_id"],))
+    conn.execute("DELETE FROM fills WHERE account_id=?", (acc["account_id"],))
+    conn.commit()
+    acc = guard.ledger.account(bot_id, "paper")
+    for day in range(32):
+        observe(conn, acc, 50_000, started + day * DAY, guard.cfg)
+    for i in range(trades):
+        ts = started + (i + 1) * DAY
+        conn.execute("INSERT INTO fills "
+                     "(account_id,bot_id,mode,ts,pair,side,qty,price,fee,pnl,reason) "
+                     "VALUES (?,?,'paper',?,'BTC/USD','buy',1,100,0.01,NULL,'test')",
+                     (acc["account_id"], bot_id, ts))
+        conn.execute("INSERT INTO fills "
+                     "(account_id,bot_id,mode,ts,pair,side,qty,price,fee,pnl,reason) "
+                     "VALUES (?,?,'paper',?,'BTC/USD','sell',1,101,0.01,0.2,'test')",
+                     (acc["account_id"], bot_id, ts))
     conn.commit()
 
 
