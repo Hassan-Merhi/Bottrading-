@@ -37,6 +37,17 @@ def pilot_config_reasons(cfg: dict) -> list[str]:
     bots = p.get("max_bots")
     if type(bots) is not int or bots < 1 or bots > 3:
         reasons.append("pilot.max_bots must be 1 to 3")
+    loss = p.get("max_live_loss_usd")
+    limit_loss = cfg.get("risk", {}).get("total_drawdown_kill_usd", 0)
+    if (not isinstance(loss, (int, float)) or isinstance(loss, bool)
+            or not math.isfinite(loss) or loss <= 0
+            or not isinstance(limit_loss, (int, float)) or loss > limit_loss):
+        reasons.append("pilot loss threshold must be positive and no higher than risk kill limit")
+    dd = p.get("max_live_drawdown_pct")
+    if (not isinstance(dd, (int, float)) or isinstance(dd, bool)
+            or not math.isfinite(dd) or dd <= 0
+            or dd > cfg.get("graduation", {}).get("max_paper_drawdown_pct", 0)):
+        reasons.append("pilot drawdown threshold must be within graduation limit")
     if (isinstance(p.get("max_total_capital_usd"), (int, float))
             and isinstance(p.get("max_per_bot_usd"), (int, float))
             and p.get("max_total_capital_usd", 0) > 0
