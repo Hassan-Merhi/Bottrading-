@@ -470,8 +470,10 @@ class EvolutionRun:
                 previous_reasons = list(test.get("gate_failures", []))
                 # A repeated result must NOT be re-scored under a changed
                 # data period, risk model or verification protocol.
-                if audit.get("protocol") != PROTOCOL_VERSION or (
-                        audit.get("rules_sha256") != rules_hash(self.cfg)):
+                if (audit.get("protocol") != PROTOCOL_VERSION
+                        or audit.get("rules_sha256") != rules_hash(self.cfg)
+                        or audit.get("test_start_ms") != self.splits.validation_end
+                        or audit.get("test_end_ms") != self.splits.end):
                     previous_reasons.append("previously tested with legacy or different rules; "
                                             "requires genuinely new future data")
                 passed_previous = bool(row[1]) and not previous_reasons
