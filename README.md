@@ -126,6 +126,41 @@ quotes/trades (ideally order-book depth) and replay the exact placement,
 two-minute timeouts, partial fills and cancellation acknowledgments.
 Validation against real future paper execution remains required.
 
+## Phase 4: independent historical verification (not proof of future earnings)
+
+The training period uses multiple chronological walk-forward windows and must
+contain at least two distinct market regimes. After training, candidates are
+screened on a separate validation period. The first 24 hours following each
+validation and test boundary are embargoed before simulated orders begin.
+Validation requires a positive return **after** trading costs, at least 12
+filled trades, maximum drawdown <=10%, profit factor >=1.15, consistency in at
+least two of three validation slices, and a positive result when maker/taker
+fees are multiplied by 1.25 and spreads/slippage are doubled.
+
+Only the survivors can spend a one-time unseen-data test: >=20 filled trades,
+positive net result, maximum drawdown <=10%, profit factor >=1.15,
+nonnegative Sharpe and returns above net buy-and-hold. This is deliberately
+hard; **zero qualified candidates is an acceptable result**. The original
+Kraken fee assumptions and real execution limits remain unchanged.
+
+For every new test the system persists the market pair, timeframe, exact
+period and candle count, SHA-256 of OHLCV test data, a SHA-256 over the fee
+configuration / verification settings AND tested source code, plus the
+failure reasons. Tests are never recomputed for the same genome, even if a
+config, code or test period changes; mismatched legacy evaluations cannot
+be described as current-phase success and do not automatically deploy to
+paper. Only five new candidates per roughly 30-day holdout epoch may
+consume that historical test. The quota **limits** multiple-testing bias;
+it does not remove it, and earlier historical trials are not magically
+made out-of-sample by a software change. Only newly collected forward
+market data can add genuinely unseen evidence.
+
+A limit entry that cannot be proved from available OHLC bars remains
+unfilled. The simulator cannot reproduce the exchange order book, exact
+queue priority, partial fills or true two-minute tick timing. The 30-day
+forward paper check and explicit owner authorization for live trading still
+apply. All historical results are hypothetical, not an assurance of profits.
+
 ## The gate before paper trading
 
 Evolution scores every bot on walk-forward windows of the training period.

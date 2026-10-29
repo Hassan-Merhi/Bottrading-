@@ -13,7 +13,8 @@ from bots.tests.test_strategy import base_genome
 
 def window(**kw):
     w = dict(total_return=0.05, hold_return=0.0, max_drawdown=0.05, sharpe=1.0, calmar=1.0,
-             n_trades=10, stop_outs=2, fees_paid=1.0, gross_pnl=5.0, rejected_orders=0)
+             n_trades=10, stop_outs=2, fees_paid=1.0, gross_pnl=5.0, rejected_orders=0,
+             profit_factor=1.5)
     w.update(kw)
     return w
 
@@ -60,7 +61,16 @@ def test_graveyard_penalizes_similar_genomes(conn, cfg):
 def small_cfg(cfg):
     cfg["evolution"].update(population_size=24, generations=4, workers=1, seed=42,
                             walk_forward_windows=3, finalists=3)
-    cfg["evolution"]["gate"].update(neighbours=0, min_trade_tstat=0)  # tested on their own
+    cfg["evolution"]["gate"].update(
+        neighbours=0, min_trade_tstat=0, min_train_regimes=1,
+        min_validation_trades=0, max_validation_drawdown_pct=100,
+        min_validation_profit_factor=0, min_validation_sharpe=-999,
+        validation_subwindows=0, min_positive_validation_windows=0,
+        require_cost_stress=False, embargo_hours=0,
+        min_test_trades=5, max_test_drawdown_pct=25,
+        min_test_profit_factor=0, min_test_sharpe=-999,
+        test_must_beat_hold=False, max_new_test_attempts_per_epoch=100,
+    )  # isolate legacy pipeline tests from independent Phase 4 gates
     cfg["backtest"]["starting_balance_usd"] = 1000
     return cfg
 
@@ -186,10 +196,14 @@ def test_gate_holds_back_bots_that_lost_in_a_train_window(conn, cfg, synthetic_m
     assert bots[0].genome not in tested and result.gate_rejected == 1
     assert finalists and all(f.passed_test and f.reasons == [] for f in finalists)
     # The unseen-data verdict names every rule it failed.
-    reasons = run._test_verdict({"total_return": -0.1, "n_trades": 2, "max_drawdown": 0.4})
+    reasons = run._test_verdict({"total_return": -0.1, "hold_return": 0, "n_trades": 2,
+                                 "max_drawdown": 0.4, "sharpe": 1, "profit_factor": 1.5,
+                                 "fees_paid": 1.0})
     assert reasons == ["lost money on unseen data", "only 2 trades on unseen data (need 5)",
                        "drawdown 40% on unseen data (limit 25%)"]
-    assert run._test_verdict({"total_return": 0.1, "n_trades": 5, "max_drawdown": 0.2}) == []
+    assert run._test_verdict({"total_return": 0.1, "hold_return": 0, "n_trades": 5,
+                              "max_drawdown": 0.2, "sharpe": 1, "profit_factor": 1.5,
+                              "fees_paid": 1.0}) == []
 
 
 def test_robustness_gate_rejects_fragile_and_lucky_bots(conn, cfg, synthetic_market, monkeypatch):

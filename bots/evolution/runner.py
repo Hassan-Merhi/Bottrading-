@@ -16,7 +16,7 @@ import random
 import sqlite3
 import uuid
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -24,9 +24,11 @@ import numpy as np
 
 from bots.backtest.engine import CostModel, run_backtest
 from bots.data.loader import Series, Splits, make_splits
-from bots.evolution.diagnosis import diagnose
+from bots.evolution.diagnosis import diagnose, market_regime
 from bots.evolution.diversity import coverage, diverse_top
 from bots.evolution.fitness import Evaluation, Evaluator, score_windows
+from bots.evolution.verification import (DAY_MS, PROTOCOL_VERSION, holdout_used,
+                                         rules_hash, seal, validate_performance)
 from bots.evolution.graveyard import Graveyard, failure_summary
 from bots.data.mood import load_fear_greed
 from bots.strategy.context import MarketContext, build_context
@@ -84,6 +86,7 @@ class RunResult:
     validation_notes: list[str] = field(default_factory=list)
     # Distribution across pairs and strategies in the final candidate pool.
     candidate_coverage: dict = field(default_factory=dict)
+    test_budget_blocked: int = 0  # strategy passes selection but holdout attempts are exhausted
 
 
 class EvolutionRun:
@@ -277,8 +280,13 @@ class EvolutionRun:
         _, entries, exits = self._serial_evaluator.cache.get(g)
         stops = self._serial_evaluator.cache.stops(g)
         cost = CostModel.from_config(self.cfg["backtest"], g.pair, self.cfg.get("execution"))
-        return run_backtest(s, entries, exits, g, s.index_of(period[0]), s.index_of(period[1]),
-                            cost, stops).metrics
+        # Purge the first few candles after each research boundary. This
+        # ensures orders are not simulated immediately at a split transition.
+        gap = int(self.ecfg.get("gate", {}).get("embargo_hours", 0) * 3_600_000)
+        beginning = period[0] + (gap if period in (self.splits.validation, self.splits.test)
+                                 else 0)
+        return run_backtest(s, entries, exits, g, s.index_of(beginning),
+                            s.index_of(period[1]), cost, stops).metrics
 
     def _train_gate(self, bot: Bot) -> list[str]:
         """Why a top bot may not spend its test check: a train window that lost money."""
@@ -286,10 +294,20 @@ class EvolutionRun:
         if not gate.get("every_window_profitable", False):
             return []
         losing = [i for i, w in enumerate(bot.evaluation.windows) if w["total_return"] <= 0]
-        if not losing:
-            return []
-        return [f"lost money in train window {', '.join(str(i + 1) for i in losing)} "
-                f"of {len(bot.evaluation.windows)}"]
+        if losing:
+            return [f"lost money in train window {', '.join(str(i + 1) for i in losing)} "
+                    f"of {len(bot.evaluation.windows)}"]
+        min_regimes = int(gate.get("min_train_regimes", 1))
+        if min_regimes > 1:
+            s = self.market[(bot.genome.pair, bot.genome.timeframe)]
+            regimes = {
+                market_regime(s, s.index_of(a), s.index_of(b))[0]
+                for a, b in self.windows_ms
+            } - {"unknown"}
+            if len(regimes) < min_regimes:
+                return [f"only {len(regimes)} distinct training market regimes "
+                        f"(need {min_regimes})"]
+        return []
 
     def _neighbours(self, g: Genome, n: int, scale: float) -> list[Genome]:
         """Variants of g with every active numeric gene nudged by up to +-scale."""
@@ -351,18 +369,53 @@ class EvolutionRun:
         return reasons
 
     def _test_verdict(self, test: dict) -> list[str]:
-        """Why the one-time unseen-data check failed; empty means it passed."""
+        """One-time holdout gate after actual fees, limits, slippage and spread."""
+        return validate_performance(test, self.ecfg.get("gate") or {}, "unseen data")
+
+    def _validation_reasons(self, g: Genome, val: dict) -> list[str]:
+        """Only validation data can be used for robustness/parameter decisions."""
         gate = self.ecfg.get("gate") or {}
-        reasons = []
-        if test["total_return"] <= 0:
-            reasons.append("lost money on unseen data")
-        if test["n_trades"] < gate.get("min_test_trades", 0):
-            reasons.append(f"only {test['n_trades']} trades on unseen data "
-                           f"(need {gate['min_test_trades']})")
-        dd_limit = gate.get("max_test_drawdown_pct")
-        if dd_limit is not None and test["max_drawdown"] > dd_limit / 100:
-            reasons.append(f"drawdown {test['max_drawdown']:.0%} on unseen data "
-                           f"(limit {dd_limit}%)")
+        reasons = validate_performance(val, gate, "validation")
+        if reasons:
+            return reasons
+        s = self.market[(g.pair, g.timeframe)]
+        a = self.splits.validation[0]
+        b = self.splits.validation[1]
+        embargo = int(gate.get("embargo_hours", 0) * 3_600_000)
+        a += embargo
+        parts = int(gate.get("validation_subwindows", 0))
+        required = int(gate.get("min_positive_validation_windows", 0))
+        if parts and required:
+            edges = np.linspace(a, b, parts + 1).astype("int64")
+            sub = [self._evaluate_period(g, (int(edges[i]), int(edges[i + 1])))
+                   for i in range(parts)]
+            profitable = sum(m["total_return"] > 0 and m["n_trades"] > 0 for m in sub)
+            val["positive_subwindows"] = profitable
+            val["subwindow_count"] = parts
+            if profitable < required:
+                reasons.append(f"only {profitable} of {parts} validation periods profitable "
+                               f"(need {required})")
+        if reasons:
+            return reasons
+        if gate.get("require_cost_stress", False):
+            _, entries, exits = self._serial_evaluator.cache.get(g)
+            stops = self._serial_evaluator.cache.stops(g)
+            original = CostModel.from_config(self.cfg["backtest"], g.pair,
+                                             self.cfg.get("execution"))
+            stressed = replace(
+                original,
+                fee=original.fee * float(gate.get("stress_fee_multiplier", 1.25)),
+                maker_fee=(original.maker_fee * float(gate.get("stress_fee_multiplier", 1.25))
+                           if original.maker_fee is not None else None),
+                slippage=original.slippage * float(gate.get("stress_slippage_multiplier", 2)),
+                spread_bps=original.spread_bps * float(gate.get("stress_spread_multiplier", 2)),
+            )
+            m = run_backtest(s, entries, exits, g, s.index_of(a), s.index_of(b),
+                             stressed, stops).metrics
+            val["stress_return"] = m["total_return"]
+            val["stress_trades"] = m["n_trades"]
+            if m["total_return"] <= 0 or m["n_trades"] == 0:
+                reasons.append("no profit under higher fees, spreads and slippage on validation")
         return reasons
 
     def _final_checks(self, bots: list[Bot], result: RunResult | None = None) -> list[Finalist]:
@@ -383,13 +436,7 @@ class EvolutionRun:
                 continue
             g = b.genome
             val = self._evaluate_period(g, self.splits.validation)
-            val_reasons = []
-            if val["total_return"] <= 0:
-                val_reasons.append("no positive net return on validation")
-            min_val_trades = int(self.ecfg.get("gate", {}).get("min_validation_trades", 0))
-            if val["n_trades"] < min_val_trades:
-                val_reasons.append(f"only {val['n_trades']} validation trades "
-                                   f"(need {min_val_trades})")
+            val_reasons = self._validation_reasons(g, val)
             if val_reasons:
                 val_rejected += 1
                 val_notes.append(f"{g.describe()}: {'; '.join(val_reasons)}")
@@ -410,17 +457,40 @@ class EvolutionRun:
                 result.falling_windows = sum(
                     w["hold_return"] < 0 for w in bots[0].evaluation.windows)
         finalists = []
+        budget_blocked = 0
+        epoch = self.splits.validation_end // (30 * DAY_MS)
+        max_tests = int(self.ecfg.get("gate", {}).get("max_new_test_attempts_per_epoch", 5))
+        consumed = holdout_used(self.conn, epoch)
         for vfit, g, val in chosen:
             row = self.conn.execute("SELECT test_json, passed_test FROM candidates "
                                     "WHERE genome_hash=?", (g.hash(),)).fetchone()
             if row is not None:
                 test = json.loads(row[0])
-                finalists.append(Finalist(g, vfit, val, test, bool(row[1]), True,
-                                          list(test.get("gate_failures", []))))
+                audit = test.get("_audit", {})
+                previous_reasons = list(test.get("gate_failures", []))
+                # A repeated result must NOT be re-scored under a changed
+                # data period, risk model or verification protocol.
+                if (audit.get("protocol") != PROTOCOL_VERSION
+                        or audit.get("rules_sha256") != rules_hash(self.cfg)
+                        or audit.get("test_start_ms") != self.splits.validation_end
+                        or audit.get("test_end_ms") != self.splits.end):
+                    previous_reasons.append("previously tested with legacy or different rules; "
+                                            "requires genuinely new future data")
+                passed_previous = bool(row[1]) and not previous_reasons
+                finalists.append(Finalist(g, vfit, val, test, passed_previous, True,
+                                          previous_reasons))
+                continue
+            if consumed >= max_tests:
+                budget_blocked += 1
                 continue
             test = self._evaluate_period(g, self.splits.test)
+            # The audit seal is written after the test is run, never used to
+            # select or train a strategy.
+            test["_audit"] = seal(self.cfg, self.splits,
+                                  self.market[(g.pair, g.timeframe)], g)
             reasons = self._test_verdict(test)
             test["gate_failures"] = reasons
+            consumed += 1
             passed = not reasons
             self.conn.execute(
                 "INSERT INTO candidates (genome_hash, run_id, genome_json, validation_fitness, "
@@ -431,5 +501,7 @@ class EvolutionRun:
                  datetime.now(timezone.utc).isoformat()),
             )
             finalists.append(Finalist(g, vfit, val, test, passed, False, reasons))
+        if result is not None:
+            result.test_budget_blocked = budget_blocked
         self.conn.commit()
         return finalists
