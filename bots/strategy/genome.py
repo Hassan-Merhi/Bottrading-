@@ -44,6 +44,15 @@ CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
     "trend_filter": TREND_FILTERS,
     "stop_mode": STOP_MODES,
 }
+# Where evolution searches. Narrower than NUMERIC_GENES, which stays wide so stored
+# genomes load unchanged. A round trip costs about 1.8% at Kraken's Tier 1 taker
+# fee plus spread and slippage, so targets under ~3% or stops under ~1.5% lose
+# by construction; and below ~30% of a $20 allocation an order misses the $5
+# exchange minimum after the first small loss.
+SEARCH_FLOORS = {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "position_size_pct": 30.0}
+# Newcomers and timeframe mutations favour slower candles, where moves are large
+# enough to clear fees. 15m stays possible, just rarer.
+TIMEFRAME_WEIGHTS = {"15m": 1.0, "1h": 2.0, "4h": 2.0}
 MIN_FAST_SLOW_GAP = 5
 MIN_MOOD_SPAN = 10
 # Values for genes added after the first release, so stored genomes still load.
@@ -143,15 +152,27 @@ def repair(values: dict) -> Genome:
     return Genome(**v)
 
 
+def _pick_timeframe(rng: random.Random, timeframes) -> str:
+    options = tuple(timeframes)
+    return rng.choices(options, [TIMEFRAME_WEIGHTS.get(tf, 1.0) for tf in options])[0]
+
+
+def _apply_search_floors(v: dict) -> dict:
+    for name, floor in SEARCH_FLOORS.items():
+        v[name] = max(v[name], floor)
+    return v
+
+
 def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Genome:
     v: dict = {
         "pair": rng.choice(tuple(pairs)),
-        "timeframe": rng.choice(tuple(timeframes)),
+        "timeframe": _pick_timeframe(rng, timeframes),
         "entry_type": rng.choice(ENTRY_TYPES),
         "trend_filter": rng.choice(TREND_FILTERS),
         "stop_mode": rng.choice(STOP_MODES),
     }
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
+        lo = SEARCH_FLOORS.get(name, lo)
         v[name] = rng.randint(int(lo), int(hi)) if is_int else rng.uniform(lo, hi)
     if rng.random() < 0.5:  # half the newcomers ignore market mood
         v["mood_min"], v["mood_max"] = 0, 100
@@ -159,7 +180,7 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES) -> Gen
         v["trail_pct"] = 0.0
     if rng.random() < 0.5:  # half hold until stop, target or exit signal
         v["max_hold_candles"] = 0
-    return repair(v)
+    return repair(_apply_search_floors(v))
 
 
 def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10,
@@ -170,7 +191,8 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
                "trend_filter": TREND_FILTERS, "stop_mode": STOP_MODES}
     for name in CATEGORICAL_GENES:
         if rng.random() < categorical_rate:
-            v[name] = rng.choice(options[name])
+            v[name] = (_pick_timeframe(rng, timeframes) if name == "timeframe"
+                       else rng.choice(options[name]))
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         if rng.random() < rate:
             step = v[name] * rng.uniform(-scale, scale)
@@ -179,7 +201,7 @@ def mutate(g: Genome, rng: random.Random, rate: float = 0.3, scale: float = 0.10
             if is_int and abs(step) < 1:
                 step = rng.choice((-1, 1))
             v[name] = v[name] + step
-    return repair(v)
+    return repair(_apply_search_floors(v))
 
 
 def crossover(a: Genome, b: Genome, rng: random.Random) -> Genome:

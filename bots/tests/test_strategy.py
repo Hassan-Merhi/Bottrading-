@@ -172,3 +172,18 @@ def test_signal_cache_memory_is_bounded():
     _, entries, _ = cache.get(base_genome(fast_period=12, slow_period=40))
     assert entries.dtype == np.int32
     assert next(iter(cache._atr.values())).dtype == np.float32
+
+
+def test_search_avoids_fee_losing_and_unfillable_settings():
+    from bots.strategy.genome import SEARCH_FLOORS
+    rng = random.Random(7)
+    born = [random_genome(rng) for _ in range(600)]
+    for g in born + [mutate(g, rng, rate=1.0, scale=0.5) for g in born[:200]]:
+        for name, floor in SEARCH_FLOORS.items():
+            assert getattr(g, name) >= floor
+    # Slower candles are favoured but 15m is still searched.
+    counts = {tf: sum(g.timeframe == tf for g in born) for tf in ("15m", "1h", "4h")}
+    assert 0 < counts["15m"] < counts["1h"] and counts["15m"] < counts["4h"]
+    # Stored genomes keep their genes; the floors only steer the search.
+    old = base_genome(stop_loss_pct=0.8, take_profit_pct=1.5, position_size_pct=15)
+    assert Genome.from_dict(old.to_dict()) == old

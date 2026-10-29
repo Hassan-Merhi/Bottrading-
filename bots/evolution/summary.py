@@ -17,6 +17,27 @@ def _pct(x: float) -> str:
     return f"{x * 100:+.1f}%"
 
 
+STARVED_WARNING = 0.5
+
+
+def starvation_note(result: RunResult) -> str | None:
+    """A warning when most of the final generation barely traded.
+
+    Bots that cannot fill trades all score alike, so selection turns random and
+    nobody improves. That points at execution or sizing settings, not at luck.
+    """
+    if not result.generations:
+        return None
+    last = result.generations[-1]
+    starved = last.get("starved")
+    if starved is None or starved < STARVED_WARNING:
+        return None
+    return (f"WARNING: {starved:.0%} of the final generation made fewer than the minimum "
+            f"trades (median {last['median_trades']:.0f}). Evolution cannot rank bots "
+            "that do not trade; check execution.entry_order, fees, position sizes and the "
+            "starting balance against the exchange minimums.")
+
+
 def render(result: RunResult, conn: sqlite3.Connection) -> str:
     sp = result.splits
     lines = [
@@ -44,6 +65,12 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
                      f"{g['worst']:.3f} | {g['deaths']} |")
     if gens:
         lines += ["", f"Best bot in the final generation: {gens[-1]['best_genome']}"]
+        if "median_trades" in gens[-1]:
+            lines.append(f"Final generation: median {gens[-1]['median_trades']:.0f} trades "
+                         f"per bot over the train windows.")
+        note = starvation_note(result)
+        if note:
+            lines += ["", f"**{note}**"]
         ec = gens[-1].get("elite_coverage") or {}
         if ec:
             lines += ["", "## Elite search coverage (final generation)", "",
@@ -116,6 +143,9 @@ def short_summary(result: RunResult) -> str:
     lines = [f"Evolution run finished: {len(gens)} generations, {result.deaths} bots retired."]
     if gens:
         lines.append(f"Best of the final generation: {gens[-1]['best_genome']}")
+    note = starvation_note(result)
+    if note:
+        lines.append(note)
     lines.append(f"Gate held back {result.gate_rejected} of the top bots.")
     lines.append(f"Validation rejected another {result.validation_rejected}; "
                  "none of these used the untouched test period.")

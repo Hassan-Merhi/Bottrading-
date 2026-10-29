@@ -233,6 +233,7 @@ class EvolutionRun:
                                 ev.volatility, bot.fitness, ev.summary())
 
         fit = np.array([b.fitness for b in bots])
+        trades = np.array([b.evaluation.total_trades for b in bots])
         summary = failure_summary(gen, diagnoses)
         n_elite = max(2, int(round(size * self.ecfg["elite_fraction"])))
         eligible = [b for b in survivors] or bots[:2]
@@ -241,6 +242,8 @@ class EvolutionRun:
                              max_family_share=self.ecfg.get("max_elite_family_share", 0.2))
         stats = {"generation": gen, "best": float(fit.max()), "median": float(np.median(fit)),
                  "worst": float(fit.min()), "deaths": len(diagnoses),
+                 "median_trades": float(np.median(trades)),
+                 "starved": float(np.mean(trades < self.cfg["fitness"]["min_trades"])),
                  "best_genome": bots[0].genome.describe(), "failure_summary": summary,
                  "elite_coverage": coverage([b.genome for b in elites])}
         result.generations.append(stats)

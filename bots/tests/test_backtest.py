@@ -269,3 +269,29 @@ def test_paper_backtest_share_market_execution_price():
     sell = ex.create_order("BTC/USD", "market", "sell", 1.0)
     assert buy["average"] == pytest.approx(market_fill_price(px, "buy", slip, spread))
     assert sell["average"] == pytest.approx(market_fill_price(px, "sell", slip, spread))
+
+
+def test_configured_entries_fill_on_continuous_crypto_candles(cfg):
+    """24/7 markets open each candle at the previous close. The configured entry
+    order must still fill there, or evolution sees bots with zero trades."""
+    import pandas as pd
+    from bots.data.loader import resample, series_from_df
+    from bots.data.synthetic import random_walk_candles
+
+    base = random_walk_candles(4 * 24 * 60, "15m", seed=3)
+    assert np.allclose(base["open"].to_numpy()[1:], base["close"].to_numpy()[:-1])
+    s = series_from_df("BTC/USD", "1h", resample(base, "15m", "1h"))
+    entries = np.arange(5, len(s) - 2, 12)
+    exits = entries + 3
+    g = base_genome(position_size_pct=50, stop_loss_pct=5, take_profit_pct=15,
+                    max_trades_per_day=10)
+    configured = CostModel.from_config(cfg["backtest"], "BTC/USD", cfg["execution"])
+    r = run(s, entries, exits, g, cost=configured)
+    assert len(r.trades) >= len(entries) // 2
+    assert r.unfilled_limits == 0
+
+    # Why limit entries are not the default: with bars longer than the order
+    # timeout, the backtest cannot prove a fill, so almost none happen.
+    limit = CostModel.from_config(cfg["backtest"], "BTC/USD",
+                                  {**cfg["execution"], "entry_order": "limit"})
+    assert len(run(s, entries, exits, g, cost=limit).trades) < len(entries) // 10

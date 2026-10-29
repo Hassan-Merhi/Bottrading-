@@ -221,10 +221,11 @@ def test_robustness_gate_rejects_fragile_and_lucky_bots(conn, cfg, synthetic_mar
     assert variants == run._neighbours(g, 6, 0.10)  # deterministic per genome
     for v in variants:
         d, base = v.to_dict(), g.to_dict()
-        for name, (lo, hi, _) in NUMERIC_GENES.items():
+        for name, (lo, hi, is_int) in NUMERIC_GENES.items():
             assert lo <= d[name] <= hi
             if base[name] != 0 and name not in ("fast_period", "slow_period", "mood_max"):
-                assert abs(d[name] - base[name]) <= max(abs(base[name]) * 0.10 + 1e-9, 1)
+                rounding = 0.5 if is_int else 0.0  # integer genes round after the nudge
+                assert abs(d[name] - base[name]) <= max(abs(base[name]) * 0.10 + rounding + 1e-9, 1)
 
     def fake_eval(returns):
         def evaluate(genome):
@@ -262,3 +263,16 @@ def test_short_summary_names_the_outcome(conn, cfg, synthetic_market):
     assert "Evolution run finished: 4 generations" in text and "Gate held back" in text
     assert ("paper trading" in text) or ("failed" in text)
     assert all(f"held back: " in render(result, conn) for _ in result.gate_notes[:1])
+
+
+def test_report_warns_when_most_bots_cannot_trade(conn, cfg, synthetic_market):
+    from bots.evolution.summary import render, short_summary, starvation_note
+    cfg = small_cfg(cfg)
+    result = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None).run()
+    last = result.generations[-1]
+    assert {"median_trades", "starved"} <= last.keys()
+    last.update(starved=0.9, median_trades=0)
+    note = starvation_note(result)
+    assert note and "90%" in note and note in short_summary(result) and note in render(result, conn)
+    last["starved"] = 0.1
+    assert starvation_note(result) is None

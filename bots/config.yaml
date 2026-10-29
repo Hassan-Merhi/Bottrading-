@@ -48,8 +48,12 @@ backtest:
 # Order execution (backtest, paper and live use the same rule)
 # ---------------------------------------------------------------------------
 execution:
-  entry_order: limit                     # limit: rest a buy at the bid and pay the maker fee;
-                                         # market: buy at once at the taker fee
+  # market: buy at once at the taker fee (default). limit: rest a buy at the bid
+  # and pay the maker fee. Keep market until there is data that can prove limit
+  # fills: on 15m+ candles the next bar opens at the previous close, so the
+  # backtest's open-through rule fills almost no limit entries (0% on BTC), and
+  # evolution then has no trades to learn from.
+  entry_order: market
   limit_timeout_s: 120                   # cancel an entry that has not filled after this long
   limit_bid_offset_bps: 5                # historical prior-close bid proxy (half of assumed spread)
   limit_trade_through_bps: 2             # intrabar maker fills require strict trade-through

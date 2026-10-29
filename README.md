@@ -352,14 +352,20 @@ no disk. Leave the Kraken keys unset while paper trading.
 ## Before trusting results
 
 - Fees are Kraken Pro's Tier 1 rates since 9 July 2026: `maker_fee_pct` 0.40%
-  and `taker_fee_pct` 0.80%. Entries rest as limit buys at the bid
-  (`execution.entry_order: limit`) and pay the maker rate when they fill;
-  every exit is a market order at the taker rate. A round trip costs about
-  1.25% with slippage, which is still why most strategies die. In the
-  backtest a limit entry counts as filled only when the candle later trades
-  below its open, so bots cannot assume fills they would not have got. An
-  entry that has not filled after `limit_timeout_s` is withdrawn. Re-check
-  the fee schedule occasionally.
+  and `taker_fee_pct` 0.80%. Entries are market buys by default
+  (`execution.entry_order: market`) and every exit is a market order, so a
+  round trip costs about 1.8% with spread and slippage. That is why most
+  strategies die, and why evolution only searches stops of 1.5%+, targets of
+  3%+, positions of 30%+ of the allocation (so a $20 bot clears the $5
+  minimum), and favours 1h/4h candles over 15m (`SEARCH_FLOORS` and
+  `TIMEFRAME_WEIGHTS` in `bots/strategy/genome.py`).
+- Limit entries (`execution.entry_order: limit`) rest at the bid for the
+  maker rate, but are off by default: crypto candles open at the previous
+  close, so on 15m+ bars the backtest can almost never prove a fill (0% on
+  BTC). With limit entries the whole population made zero trades, scored
+  alike, and evolution could not improve. The evolution report now warns
+  when most of the final generation is starved of trades. Re-check the fee
+  schedule occasionally.
 - `min_order` sizes are deliberately strict guesses. Live orders use the larger
   of the config value and Kraken's reported minimum.
 - The pair whitelist is BTC, ETH, SOL, XRP, LINK, ADA and DOGE against USD.
