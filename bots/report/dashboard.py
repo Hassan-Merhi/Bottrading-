@@ -28,6 +28,7 @@ from bots.db import connect
 from bots.paper.trader import decide_graduation
 from bots.paper.forward import evidence, net_hold_return, history
 from bots.live.pilot import pilot_status
+from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
@@ -369,6 +370,7 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
                                                  DAILY_HALT_UNTIL, HEARTBEAT)}
             s["market_data"] = market_health(conn, cfg)
             s["pilot"] = pilot_status(conn, cfg, now_ms())
+            s["scaling"] = scale_review(conn, cfg, now_ms())
             return JSONResponse(json.loads(json.dumps(s, default=str)))
         finally:
             conn.close()
@@ -378,6 +380,14 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         conn = db()
         try:
             return JSONResponse(pilot_status(conn, cfg, now_ms()))
+        finally:
+            conn.close()
+
+    @app.get("/api/scaling/readiness")
+    def scaling_readiness():
+        conn = db()
+        try:
+            return JSONResponse(scale_review(conn, cfg, now_ms()))
         finally:
             conn.close()
 
@@ -693,6 +703,20 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
                  f' · live accounts: {p_status["live_accounts"]}'
                  f' · allocated: ${p_status["allocated_live_usd"]:.2f}'
                  f' · blockers: {escape(blockers)}</div></section>')
+
+    scale = scale_review(conn, cfg, now)
+    reason = "; ".join(scale["review_blockers"]) or "eligible for a separate manual review"
+    parts.append(
+        '<section id="scaling"><h2>Live performance &amp; capital scaling</h2>'
+        '<p class="help">Real-money performance must be measured separately from paper. '
+        'Scaling never happens automatically and cannot be earned by backtests. '
+        'Future allocations still need a separate owner decision, Kraken verification '
+        'and the hard $100 system ceiling.</p>'
+        f'<div class="notice"><b>{"OFF — NO SCALING" if not scale["enabled"] else escape(scale["status"].upper())}</b>'
+        f' · live evidence accounts: {scale["live_accounts"]}'
+        f' · allowable automatic increase: $0'
+        f' · blockers: {escape(reason)}</div>'
+        '</section>')
 
     parts.append('<section id="pipeline"><h2>How a bot gets to real money</h2>'
                  '<p class="help">Every bot must pass each stage in order. Losers are retired at '
