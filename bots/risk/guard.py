@@ -29,7 +29,8 @@ from typing import Any, Callable
 
 from bots.config import PROJECT_DIR
 from bots.live.reconcile import ReconciliationError, reconcile_live_orders
-from bots.live.pilot import paper_qualification, pilot_config_reasons
+from bots.live.pilot import (certified_pilot, certify_pilot, paper_qualification,
+                             pilot_config_reasons)
 from bots.risk.ledger import DAY_MS, Ledger
 from bots.risk.state import (CRASH_LOCK, DAILY_HALT_UNTIL, ENTRY_HALT, KILL_SWITCH, LIVE_EPOCH,
                              LIVE_RECON_HALT, OWNER_PAUSE,
@@ -338,13 +339,10 @@ class RiskGuard:
                 (acc["bot_id"],)).fetchone()
             if row is None:
                 raise OrderRefused("unknown pilot bot")
-            import json
-            g = json.loads(row["genome_json"])
-            reasons = paper_qualification(self.conn, self.cfg, acc["bot_id"],
-                                          row["genome_hash"], g["pair"],
-                                          self.marks.get(g["pair"]), self.clock())
-            if reasons:
-                raise OrderRefused("pilot verification expired: " + "; ".join(reasons))
+            if not certified_pilot(self.conn, self.cfg, acc["bot_id"],
+                                   row["genome_hash"], self.live_epoch()):
+                raise OrderRefused("live bot has no valid paper-verified pilot certificate "
+                                   "for this confirmation epoch")
         cap = min(float(risk["max_total_capital_usd"]),
                   float(pilot["max_total_capital_usd"]), HARD_CAPITAL_CEILING_USD)
         if sum(a["allocation"] for a in live) > cap + 1e-9:
@@ -636,8 +634,14 @@ class RiskGuard:
         min_cost = self._minimums("live", self._pair(bot_id))[1]
         if allocation < min_cost:
             return None
-        return self.ledger.open_account(bot_id, "live", allocation, self.live_epoch(),
-                                        self.clock(), price)
+        account_id = self.ledger.open_account(bot_id, "live", allocation, self.live_epoch(),
+                                              self.clock(), price)
+        if pilot.get("require_qualified_paper", True):
+            certify_pilot(self.conn, self.cfg, bot_id, row["genome_hash"],
+                          self.live_epoch(), self.clock())
+            self._event("pilot_certified", f"{bot_id}: paper evidence locked for live epoch "
+                        f"{self.live_epoch()}, allocation ${allocation:.2f}")
+        return account_id
 
     def demote(self, bot_id: str, reason: str) -> None:
         """A live bot that broke its limits goes back to paper. It never gets more money."""
