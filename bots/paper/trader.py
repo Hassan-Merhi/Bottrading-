@@ -409,7 +409,9 @@ class Trader:
         self.alerter.alert(f"Paper bot {bot['bot_id']} retired: {reason}", kind="info")
 
     def _live_limits(self) -> None:
-        limit = self.cfg["graduation"]["max_paper_drawdown_pct"] / 100
+        limit = min(self.cfg["graduation"]["max_paper_drawdown_pct"],
+                    self.cfg.get("pilot", {}).get("max_live_drawdown_pct",
+                                                 self.cfg["graduation"]["max_paper_drawdown_pct"])) / 100
         for acc in self.guard.ledger.active("live"):
             if acc["max_drawdown"] > limit:
                 self.guard.demote(acc["bot_id"], f"live drawdown {acc['max_drawdown']:.1%} "
