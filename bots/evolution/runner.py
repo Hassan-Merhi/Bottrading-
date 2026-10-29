@@ -25,6 +25,7 @@ import numpy as np
 from bots.backtest.engine import CostModel, run_backtest
 from bots.data.loader import Series, Splits, make_splits
 from bots.evolution.diagnosis import diagnose
+from bots.evolution.diversity import coverage, diverse_top
 from bots.evolution.fitness import Evaluation, Evaluator, score_windows
 from bots.evolution.graveyard import Graveyard, failure_summary
 from bots.data.mood import load_fear_greed
@@ -79,6 +80,10 @@ class RunResult:
     gate_rejected: int = 0       # top bots kept from the test by the gate (see gate_notes)
     gate_notes: list[str] = field(default_factory=list)   # "strategy: reason" per held-back bot
     falling_windows: int = 0     # train windows where simply holding the coin lost money
+    validation_rejected: int = 0  # passed training gate but did not pass validation
+    validation_notes: list[str] = field(default_factory=list)
+    # Distribution across pairs and strategies in the final candidate pool.
+    candidate_coverage: dict = field(default_factory=dict)
 
 
 class EvolutionRun:
@@ -226,9 +231,15 @@ class EvolutionRun:
 
         fit = np.array([b.fitness for b in bots])
         summary = failure_summary(gen, diagnoses)
+        n_elite = max(2, int(round(size * self.ecfg["elite_fraction"])))
+        eligible = [b for b in survivors] or bots[:2]
+        elites = diverse_top(eligible, n_elite, lambda b: (b.genome.pair, b.genome.entry_type),
+                             max_pair_share=self.ecfg.get("max_elite_pair_share", 0.4),
+                             max_family_share=self.ecfg.get("max_elite_family_share", 0.2))
         stats = {"generation": gen, "best": float(fit.max()), "median": float(np.median(fit)),
                  "worst": float(fit.min()), "deaths": len(diagnoses),
-                 "best_genome": bots[0].genome.describe(), "failure_summary": summary}
+                 "best_genome": bots[0].genome.describe(), "failure_summary": summary,
+                 "elite_coverage": coverage([b.genome for b in elites])}
         result.generations.append(stats)
         result.deaths += len(diagnoses)
         self.conn.execute(
@@ -244,11 +255,10 @@ class EvolutionRun:
         if last:
             return [b.genome for b in bots]
 
-        n_elite = max(2, int(round(size * self.ecfg["elite_fraction"])))
-        elites = [b.genome for b in survivors[:n_elite]] or [b.genome for b in bots[:2]]
-        population = list(dict.fromkeys(elites))
+        elite_genomes = [b.genome for b in elites]
+        population = list(dict.fromkeys(elite_genomes))
         n_new = int(round(size * self.ecfg["newcomer_fraction"]))
-        self._fill(population, size - n_new, lambda: self._offspring(elites))
+        self._fill(population, size - n_new, lambda: self._offspring(elite_genomes))
         self._fill(population, size, self._newcomer)
         return population
 
@@ -354,10 +364,15 @@ class EvolutionRun:
         return reasons
 
     def _final_checks(self, bots: list[Bot], result: RunResult | None = None) -> list[Finalist]:
-        pool = bots[: max(1, int(len(bots) * 0.2))]
+        count = max(1, int(len(bots) * self.ecfg.get("candidate_pool_fraction", 0.2)))
+        pool = diverse_top(bots, count, lambda b: (b.genome.pair, b.genome.entry_type),
+                           max_pair_share=self.ecfg.get("max_candidate_pair_share", 0.4),
+                           max_family_share=self.ecfg.get("max_candidate_family_share", 0.2))
         scored = []
         rejected = 0
         notes: list[str] = []
+        val_rejected = 0
+        val_notes: list[str] = []
         for b in pool:
             reasons = self._train_gate(b) or self._robustness_reasons(b.genome)
             if reasons:
@@ -366,12 +381,29 @@ class EvolutionRun:
                 continue
             g = b.genome
             val = self._evaluate_period(g, self.splits.validation)
+            val_reasons = []
+            if val["total_return"] <= 0:
+                val_reasons.append("no positive net return on validation")
+            min_val_trades = int(self.ecfg.get("gate", {}).get("min_validation_trades", 0))
+            if val["n_trades"] < min_val_trades:
+                val_reasons.append(f"only {val['n_trades']} validation trades "
+                                   f"(need {min_val_trades})")
+            if val_reasons:
+                val_rejected += 1
+                val_notes.append(f"{g.describe()}: {'; '.join(val_reasons)}")
+                continue
             scored.append((score_windows([val], self.cfg["fitness"]), g, val))
         scored.sort(key=lambda t: t[0], reverse=True)
-        chosen = [t for t in scored if t[2]["total_return"] > 0][: self.ecfg["finalists"]]
+        chosen = diverse_top(scored, self.ecfg["finalists"],
+                             lambda t: (t[1].pair, t[1].entry_type),
+                             max_pair_share=self.ecfg.get("max_candidate_pair_share", 0.4),
+                             max_family_share=self.ecfg.get("max_candidate_family_share", 0.2))
         if result is not None:
             result.gate_rejected = rejected
             result.gate_notes = notes
+            result.validation_rejected = val_rejected
+            result.validation_notes = val_notes
+            result.candidate_coverage = coverage([b.genome for b in pool])
             if bots:
                 result.falling_windows = sum(
                     w["hold_return"] < 0 for w in bots[0].evaluation.windows)
