@@ -38,6 +38,15 @@ python -m bots.main run
 ```
 
 The worker, every `worker.poll_seconds`:
+- independently refreshes closed Kraken 15-minute candles for **every whitelisted pair**
+  about every `worker.market_refresh_seconds` (default: five minutes), even if
+  there are zero active trading bots; it runs the refresh as a separate short
+  process, avoiding overlap with evolution and initial history backfills;
+- checks per-pair freshness and recent 15-minute candle continuity; any stale,
+  missing or gapped data, or a failed refresh, blocks **new entries across the
+  system** until the feeds recover, without disabling existing risk-reducing exits;
+  `/api/status` exposes `market_data.pairs` and the dashboard shows how many
+  of the configured pairs are fresh. Nightly evolution waits for healthy data;
 - moves test-passed candidates into paper trading (up to `paper.max_bots`,
   at most `max_per_pair` per coin and `max_per_entry_type` per rule, so the
   slots teach something about different strategies);
