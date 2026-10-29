@@ -40,6 +40,10 @@ class FakeKraken(PaperExchange):
     def fetch_balance(self):
         return {"free": {"USD": self.free_usd}}
 
+    def fetch_open_orders(self, symbol=None):
+        return [dict(o) for o in self.orders.values()
+                if o["status"] == "open" and (symbol is None or o["symbol"] == symbol)]
+
     def market(self, pair):
         return {"limits": {"amount": {"min": 0.0001}, "cost": {"min": 0.5}}}
 
