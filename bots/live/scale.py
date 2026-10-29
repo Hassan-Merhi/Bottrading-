@@ -57,7 +57,7 @@ def live_evidence(conn: sqlite3.Connection, account, cfg: dict, now: int) -> dic
     last_mark = marks[-1]["ts"] if marks else None
     days = [int(m["day"]) for m in marks]
     max_gap = max((b - a for a, b in zip(days, days[1:])), default=0)
-    start = min(marks[0]["ts"], account["started_at"]) if marks else None
+    start = marks[0]["ts"] if marks else None
     span = ((now - start) / DAY_MS if start is not None else 0.0)
     # Validity of the data matters more than a profitable-looking last-equity.
     recent_mark = last_mark is not None and 0 <= now - last_mark <= DAY_MS
