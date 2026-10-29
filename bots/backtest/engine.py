@@ -259,6 +259,12 @@ def _finish(r: Result, s: Series, cost: CostModel) -> Result:
     calmar = annual / max(max_dd, 0.01)
     t = r.trades
     wins = sum(tr.pnl > 0 for tr in t)
+    gains = sum(max(tr.pnl, 0.0) for tr in t)
+    losses = -sum(min(tr.pnl, 0.0) for tr in t)
+    # Keep the metric JSON-safe and finite, even if every observed trade won.
+    # Zero trades must never count as an infinite profit factor.
+    profit_factor = min(gains / losses, 100.0) if losses > 0 else (
+        100.0 if gains > 0 else 0.0)
     r.metrics = {
         "total_return": float(total),
         "annual_return": float(annual),
@@ -267,6 +273,7 @@ def _finish(r: Result, s: Series, cost: CostModel) -> Result:
         "calmar": float(calmar),
         "n_trades": len(t),
         "win_rate": wins / len(t) if t else 0.0,
+        "profit_factor": float(profit_factor),
         "stop_outs": sum(tr.reason == "stop" for tr in t),
         "trail_outs": sum(tr.reason == "trail" for tr in t),
         "time_outs": sum(tr.reason == "time" for tr in t),
