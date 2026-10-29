@@ -135,9 +135,12 @@ graveyard:
 # Pipeline gates (section 5)
 # ---------------------------------------------------------------------------
 graduation:
-  min_paper_days: 30
+  min_paper_days: 30                   # actual elapsed time and forward-data observation span
+  min_observed_days: 21                # real quote snapshots on 21 distinct UTC days
+  max_observation_gap_hours: 72        # interruptions longer than 3 days block graduation
   max_paper_drawdown_pct: 10
-  min_paper_trades: 20
+  min_paper_trades: 20                 # reconciled buy + sell fills, not just a counter
+  min_paper_profit_factor: 1.10        # realized net wins / losses
   must_beat_hold: true
   owner_approval_required: true
 
