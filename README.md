@@ -61,6 +61,23 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Phase 7: controlled pilot admission — disabled until separate authorization
+
+The first funded pilot is **not launched**. The deployed configuration
+remains `MODE=PAPER`, `live_enabled: false`, `risk.max_total_capital_usd: 0`,
+and `pilot.max_total_capital_usd: 0`. Phase 7 adds extra non-bypassable-in-code
+pilot signoffs, strict initial per-bot/capital/loss/drawdown ceilings, and a
+binding certificate that an individual bot passed Phase 4 and genuinely
+completed the Phase 5 forward paper trial before any live account is created.
+It is not enough to manually set a bot's database status to approved.
+Certification is bound to the actual paper account, strategy and live epoch.
+
+Use the read-only `/api/pilot/readiness` endpoint or the dashboard to view
+pilot blockers. Tests use simulated exchange responses only; a funded live
+pilot cannot safely start without real Kraken reconciliation, ongoing
+monitoring and separate owner approval. See
+[Phase 7 pilot operating plan](docs/phase7-controlled-pilot.md).
+
 ## Phase 6: fail-closed live infrastructure (no live activation)
 
 This phase prepares **only** the safety infrastructure. The production default
