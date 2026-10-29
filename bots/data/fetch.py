@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import numpy as np
 import time
 from pathlib import Path
 from typing import Callable
@@ -52,7 +53,17 @@ def update_recent(conn: sqlite3.Connection, exchange, pair: str, timeframe: str)
     df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
     step = TIMEFRAME_MS[timeframe]
     now_ms = exchange.milliseconds()
-    df = df[df.ts + step <= now_ms]  # drop the still-forming candle
+    df = df[df.ts + step <= now_ms].copy()  # drop the still-forming candle
+    if df.empty:
+        return 0
+    if not df.ts.is_monotonic_increasing or df.ts.duplicated().any():
+        raise ValueError(f"{pair} {timeframe}: duplicate or unordered candle timestamps")
+    vals = df[["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+    if not np.isfinite(vals).all() or (vals[:, :4] <= 0).any() or (vals[:, 4] < 0).any():
+        raise ValueError(f"{pair} {timeframe}: invalid price or volume")
+    if (df.high < df[["open", "close"]].max(axis=1)).any() or (
+            df.low > df[["open", "close"]].min(axis=1)).any():
+        raise ValueError(f"{pair} {timeframe}: inconsistent OHLC high/low")
     return upsert_candles(conn, pair, timeframe, df)
 
 

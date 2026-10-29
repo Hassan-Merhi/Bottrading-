@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from bots.analyst.digest import latest_digest
 from bots.data.fetch import BACKFILL_DONE
+from bots.data.health import market_health
 from bots.data.mood import latest_fear_greed
 from bots.data.store import get_meta
 from bots.db import connect
@@ -364,6 +365,7 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             st = RiskState(conn)
             s["flags"] = {k: st.get(k) for k in (KILL_SWITCH, CRASH_LOCK, ENTRY_HALT,
                                                  DAILY_HALT_UNTIL, HEARTBEAT)}
+            s["market_data"] = market_health(conn, cfg)
             return JSONResponse(json.loads(json.dumps(s, default=str)))
         finally:
             conn.close()
@@ -542,18 +544,18 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
                     '</div></div>')
     hb = st.get(HEARTBEAT)
     hb_ok = bool(hb) and now - int(hb) < 3 * w["poll_seconds"] * 1000 + 120_000
-    tf = cfg["data"]["base_timeframe"]
-    data_rows = conn.execute("SELECT pair, COUNT(*) n, MAX(ts) last FROM candles WHERE timeframe=? "
-                             "GROUP BY pair", (tf,)).fetchall()
-    last_candle = max((r["last"] for r in data_rows), default=None)
+    market = market_health(conn, cfg, now)
     backfill_done = get_meta(conn, BACKFILL_DONE) is not None
-    if not data_rows:
-        data_txt = '<span class="no">no history yet</span>'
-    elif not backfill_done:
-        data_txt = f'<span class="soon">downloading history</span> · {len(data_rows)} pairs'
+    counts = f'{market["fresh_pairs"]}/{market["total_pairs"]} current pairs'
+    if not backfill_done:
+        data_txt = f'<span class="soon">downloading history</span> · {counts}'
+    elif market["healthy"] and not market["last_errors"]:
+        data_txt = f'<span class="ok">healthy</span> · {counts}'
     else:
-        data_txt = (f'<span class="ok">ready</span> · {len(data_rows)} pairs, '
-                    f'last candle {_ago(last_candle, now)}')
+        bad = ", ".join(market["unhealthy_pairs"]) or market["last_errors"]
+        data_txt = f'<span class="no">needs attention</span> · {counts} · {escape(bad[:180])}'
+    last_refresh = market["last_attempt_ms"]
+    data_txt += f' · refreshed {_ago(last_refresh, now)}' if last_refresh else ' · not refreshed yet'
     today = _utc(now).strftime("%Y-%m-%d")
     acfg = cfg.get("analyst") or {}
     sched = [("Trading loop", f'<span class="{"ok" if hb_ok else "no"}">'

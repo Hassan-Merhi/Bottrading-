@@ -51,12 +51,20 @@ def cmd_import_csv(cfg, conn, args) -> None:
 
 
 def cmd_update(cfg, conn, args) -> None:
-    from bots.data.fetch import make_exchange, update_recent
+    """Independent public-data refresh, including when there are zero active bots."""
+    from bots.data.fetch import make_exchange
+    from bots.data.health import refresh_market_pairs
 
-    ex = make_exchange(cfg["data"]["exchange"])
-    for pair in cfg["data"]["pairs"]:
-        n = update_recent(conn, ex, pair, cfg["data"]["base_timeframe"])
-        print(f"{pair}: {n} candles")
+    exchange = make_exchange(cfg["data"]["exchange"])
+    result = refresh_market_pairs(conn, exchange, cfg)
+    for pair, n in result["updated_candles"].items():
+        health = result["pairs"][pair]
+        print(f"{pair}: {n} candles, {health['status']}, "
+              f"closed candle {health['age_minutes']} min ago", flush=True)
+    if result["errors"]:
+        print("Market data refresh failed: " + "; ".join(result["errors"]), file=sys.stderr,
+              flush=True)
+        raise SystemExit(1)
 
 
 def cmd_status(cfg, conn, args) -> None:

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from bots.config import PROJECT_DIR, resolve_path
 from bots.data.fetch import make_exchange, needs_backfill
+from bots.data.health import market_health
 from bots.analyst.digest import for_telegram, latest_digest
 from bots.data.mood import update_fear_greed
 from bots.db import connect
@@ -115,6 +116,8 @@ class Worker:
         self._evolution: subprocess.Popen | None = None
         self._backfill: subprocess.Popen | None = None
         self._backfill_at = 0.0
+        self._market_refresh: subprocess.Popen | None = None
+        self._market_refresh_at = 0.0
 
     # -- startup / shutdown ------------------------------------------------
 
@@ -152,6 +155,7 @@ class Worker:
         md = self._market_data or ReadOnlyExchange(make_exchange(self.cfg["data"]["exchange"]))
         self.trader = Trader(self.cfg, self.conn, self.guard, md, self.paper, self.alerter)
         self.trader.restore_paper_stops()
+        self._enforce_market_health()
         decision = self._record_mode()
         self.alerter.alert(f"Worker started in {decision.mode} mode."
                            + ("" if decision.mode == "LIVE" else
@@ -173,6 +177,7 @@ class Worker:
     # -- loop --------------------------------------------------------------
 
     def loop_once(self) -> None:
+        self._enforce_market_health()
         self.trader.deploy_candidates()
         try:
             report = self.trader.tick()
@@ -180,6 +185,9 @@ class Worker:
                 print("tick errors:", "; ".join(report.errors))
         except Exception as e:  # noqa: BLE001 - a broken loop must not open trades
             self.guard.halt_entries(f"trading loop error: {e}")
+        # Re-assert the independent whitelist gate even if Trader saw only healthy
+        # active-bot pairs and tried to lift a previous error halt.
+        self._enforce_market_health()
         self._record_mode()
         poll = getattr(self.alerter, "poll", None)
         if poll:
@@ -245,6 +253,7 @@ class Worker:
         return True
 
     def _scheduled(self) -> None:
+        self._check_market_refresh_process()
         w = self.cfg["worker"]
         hour = datetime.now(timezone.utc).strftime("%Y-%m-%d %H")
         if self.state.get("last_mood_update") != hour:
@@ -273,9 +282,44 @@ class Worker:
             self._backfill_at = time.time()
         backfilling = self._backfill is not None and self._backfill.poll() is None
         self._check_evolution_process()
-        if not backfilling and self._evolution is None and (
-                self._due("evolution", w["evolution_hour_utc"]) or self._evolution_retry_due()):
+        # Avoid launching another Python/pandas process during the memory-heavy
+        # evolution or history backfill on the 512 MB Render instance.
+        if not backfilling and self._evolution is None and self._market_refresh is None:
+            interval = max(60, int(w.get("market_refresh_seconds", 300)))
+            if time.time() - self._market_refresh_at >= interval:
+                self._market_refresh_at = time.time()
+                self._market_refresh = self._spawn("update")
+        # Evolution must not train on stale history or a failed public feed.
+        health = market_health(self.conn, self.cfg)
+        if (not backfilling and self._evolution is None and self._market_refresh is None
+                and health["healthy"] and not health["last_errors"]
+                and not self.state.get("market_refresh_process_error")
+                and (self._due("evolution", w["evolution_hour_utc"])
+                     or self._evolution_retry_due())):
             self.start_evolution()
+
+    def _enforce_market_health(self) -> None:
+        """Block new entries when any whitelisted pair is stale or a refresh failed."""
+        health = market_health(self.conn, self.cfg)
+        problem = health["last_errors"] or self.state.get("market_refresh_process_error", "")
+        if health["unhealthy_pairs"] or problem:
+            details = ", ".join(health["unhealthy_pairs"])
+            why = f"market data unhealthy ({details or problem})"
+            self.guard.halt_entries(why[:500])
+
+    def _check_market_refresh_process(self) -> None:
+        if self._market_refresh is None:
+            return
+        code = self._market_refresh.poll()
+        if code is None:
+            return
+        self._market_refresh = None
+        if code != 0:
+            self.state.set("market_refresh_process_error", f"refresh exited with code {code}")
+            self.guard.halt_entries(f"market data refresh failed (exit code {code})")
+            self.state.log("market_refresh_failed", f"process exited with code {code}")
+        else:
+            self.state.clear("market_refresh_process_error")
 
     def start_evolution(self) -> bool:
         """Start the nightly evolution in its own process, unless one is already running."""
