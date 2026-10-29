@@ -111,6 +111,12 @@ class Trader:
         rows = []
         for row in self.conn.execute("SELECT * FROM candidates WHERE stage='awaiting_paper' "
                                      "ORDER BY validation_fitness DESC"):
+            from bots.evolution.verification import PROTOCOL_VERSION, rules_hash
+            historical = json.loads(row["test_json"])
+            audit = historical.get("_audit") or {}
+            if not row["passed_test"] or audit.get("protocol") != PROTOCOL_VERSION or (
+                    audit.get("rules_sha256") != rules_hash(self.cfg)):
+                continue
             g = Genome.from_dict(json.loads(row["genome_json"]))
             if per_pair[g.pair] >= max_pair or per_rule[g.entry_type] >= max_rule:
                 continue  # stays in the queue for when a slot of its kind frees up
