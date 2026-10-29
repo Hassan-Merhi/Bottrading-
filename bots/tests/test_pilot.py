@@ -128,3 +128,34 @@ def test_owner_approval_without_historical_test_stays_blocked(cfg, conn, tmp_pat
     RiskState(conn).log("graduation_decision", "candidate approved by owner", clock())
     assert guard.open_live_account("candidate", 50_000) is None
     assert not conn.execute("SELECT * FROM pilot_certifications").fetchall()
+
+
+def test_pilot_dollar_loss_ceiling_triggers_kill_earlier(cfg, conn, tmp_path):
+    cfg = live_cfg(cfg, capital=20)
+    cfg["pilot"].update(max_bots=1, max_total_capital_usd=20,
+                        max_per_bot_usd=20, max_live_loss_usd=2,
+                        max_live_drawdown_pct=5)
+    guard, paper, kraken, alerts, clock = make_guard(cfg, conn, tmp_path, confirm="20")
+    add_bot(conn, "one", "live")
+    set_price(guard, 50_000)
+    assert guard.open_live_account("one", 50_000)
+    guard.enter_long("one", "live", "BTC/USD", 50_000, 90, 20, 50, "test")
+    set_price(guard, 43_000)  # $2+ mark-to-market loss, before the ordinary $10 kill
+    guard.check_limits()
+    assert guard.state.is_set("kill_switch")
+    assert guard.mode().mode == "PAPER"
+    assert "critical" in alerts.kinds()
+
+
+def test_owner_cannot_activate_pilot_with_unsafe_caps(cfg, conn, tmp_path):
+    cfg = live_cfg(cfg, capital=60)
+    guard, *_ = make_guard(cfg, conn, tmp_path)
+    cfg["pilot"]["max_live_loss_usd"] = 100
+    assert "loss threshold" in "; ".join(pilot_config_reasons(cfg))
+    assert guard.mode().mode == "PAPER"
+    cfg["pilot"]["max_live_loss_usd"] = 10
+    cfg["pilot"]["max_live_drawdown_pct"] = 40
+    assert guard.mode().mode == "PAPER"
+    cfg["pilot"]["max_live_drawdown_pct"] = 10
+    cfg["pilot"]["max_bots"] = 10
+    assert guard.mode().mode == "PAPER"
