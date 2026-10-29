@@ -181,7 +181,10 @@ class Worker:
 
     def loop_once(self) -> None:
         self._enforce_market_health()
-        self.trader.deploy_candidates()
+        feed = market_health(self.conn, self.cfg)
+        if feed["healthy"] and not feed["last_errors"] and not self.state.get(
+                "market_refresh_process_error"):
+            self.trader.deploy_candidates()
         try:
             report = self.trader.tick()
             if report.errors:
