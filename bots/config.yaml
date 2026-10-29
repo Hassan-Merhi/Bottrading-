@@ -165,6 +165,8 @@ pilot:
   max_bots: 1                            # one strategy during initial pilot
   max_total_capital_usd: 0               # no capital assigned or orders allowed
   max_per_bot_usd: 20                    # subject to existing $100 hard application ceiling
+  max_live_loss_usd: 2                   # kill the pilot at $2 total simulated/marked live loss
+  max_live_drawdown_pct: 5               # demote pilot bot sooner than the standard 10%
 
 risk:
   max_total_capital_usd: 0               # 0 = paper only. Hard ceiling in code: 100
