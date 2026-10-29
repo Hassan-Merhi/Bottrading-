@@ -36,7 +36,7 @@ def market_health(conn, cfg: dict, clock_ms: int | None = None) -> dict[str, Any
         gaps = sum(max(0, (later - earlier) // step - 1)
                    for earlier, later in zip(recent, recent[1:]))
         # Future-dated records and absent candles are never healthy.
-        fresh = age is not None and -step <= age <= max_age
+        fresh = age is not None and 0 <= age <= max_age
         status = ("missing" if last is None else
                   "stale" if not fresh else "gapped" if gaps else "fresh")
         pairs[pair] = {
