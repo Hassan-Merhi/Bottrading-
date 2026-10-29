@@ -686,8 +686,11 @@ class RiskGuard:
             return
         risk = self.cfg["risk"]
         daily, total = self.live_pnl()
-        if total <= -risk["total_drawdown_kill_usd"] and not self.state.is_set(KILL_SWITCH):
-            self.kill(f"total live loss ${-total:.2f} reached ${risk['total_drawdown_kill_usd']}")
+        pilot = self.cfg.get("pilot") or {}
+        loss_cap = min(risk["total_drawdown_kill_usd"],
+                       pilot.get("max_live_loss_usd", risk["total_drawdown_kill_usd"]))
+        if total <= -loss_cap and not self.state.is_set(KILL_SWITCH):
+            self.kill(f"total live loss ${-total:.2f} reached ${loss_cap:g} pilot/kill ceiling")
             return
         halt = int(self.state.get(DAILY_HALT_UNTIL, "0"))
         if daily <= -risk["daily_loss_limit_usd"] and self.clock() >= halt:
