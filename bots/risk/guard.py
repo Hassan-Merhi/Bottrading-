@@ -29,6 +29,7 @@ from typing import Any, Callable
 
 from bots.config import PROJECT_DIR
 from bots.live.reconcile import ReconciliationError, reconcile_live_orders
+from bots.live.pilot import paper_qualification, pilot_config_reasons
 from bots.risk.ledger import DAY_MS, Ledger
 from bots.risk.state import (CRASH_LOCK, DAILY_HALT_UNTIL, ENTRY_HALT, KILL_SWITCH, LIVE_EPOCH,
                              LIVE_RECON_HALT, OWNER_PAUSE,
@@ -134,6 +135,7 @@ def resolve_mode(cfg: dict, env: dict, confirm_path: Path, state: RiskState,
             reasons.append("max_total_capital_usd is 0 (paper only)")
         elif abs(confirmed - cap) > 1e-9:
             reasons.append(f"{CONFIRM_FILE} says {confirmed:g}, config says {cap:g}")
+    reasons += pilot_config_reasons(cfg)
     if state.is_set(KILL_SWITCH):
         reasons.append(f"kill switch active: {state.get(KILL_SWITCH)}")
     if state.is_set(CRASH_LOCK):
@@ -325,9 +327,26 @@ class RiskGuard:
         if acc["allocation"] > risk["max_per_bot_usd"] + 1e-9:
             raise OrderRefused("bot allocation above max_per_bot_usd")
         live = self.ledger.active("live")
-        if len(live) > risk["max_live_bots"]:
-            raise OrderRefused("more live bots than max_live_bots")
-        cap = min(float(risk["max_total_capital_usd"]), HARD_CAPITAL_CEILING_USD)
+        pilot = self.cfg.get("pilot") or {}
+        if len(live) > min(risk["max_live_bots"], int(pilot["max_bots"])):
+            raise OrderRefused("more live bots than pilot max_bots")
+        if acc["allocation"] > pilot["max_per_bot_usd"] + 1e-9:
+            raise OrderRefused("live account allocation exceeds pilot bot cap")
+        if pilot.get("require_qualified_paper", True):
+            row = self.conn.execute(
+                "SELECT genome_hash, genome_json FROM deployed_bots WHERE bot_id=?",
+                (acc["bot_id"],)).fetchone()
+            if row is None:
+                raise OrderRefused("unknown pilot bot")
+            import json
+            g = json.loads(row["genome_json"])
+            reasons = paper_qualification(self.conn, self.cfg, acc["bot_id"],
+                                          row["genome_hash"], g["pair"],
+                                          self.marks.get(g["pair"]), self.clock())
+            if reasons:
+                raise OrderRefused("pilot verification expired: " + "; ".join(reasons))
+        cap = min(float(risk["max_total_capital_usd"]),
+                  float(pilot["max_total_capital_usd"]), HARD_CAPITAL_CEILING_USD)
         if sum(a["allocation"] for a in live) > cap + 1e-9:
             raise OrderRefused("live allocations exceed max_total_capital_usd")
         daily, total = self.live_pnl()
@@ -591,11 +610,29 @@ class RiskGuard:
         except OrderRefused:
             return None
         risk = self.cfg["risk"]
+        pilot = self.cfg.get("pilot") or {}
         live = self.ledger.active("live")
-        if len(live) >= risk["max_live_bots"]:
+        if len(live) >= min(risk["max_live_bots"], int(pilot["max_bots"])):
             return None
-        cap = min(float(risk["max_total_capital_usd"]), HARD_CAPITAL_CEILING_USD)
-        allocation = min(float(risk["max_per_bot_usd"]), cap - sum(a["allocation"] for a in live))
+        if pilot.get("require_qualified_paper", True):
+            row = self.conn.execute(
+                "SELECT genome_hash, genome_json, status FROM deployed_bots WHERE bot_id=?",
+                (bot_id,)).fetchone()
+            if row is None or row["status"] != "approved":
+                return None
+            import json
+            genome = json.loads(row["genome_json"])
+            # Never grant capital from a manually changed status alone.
+            reasons = paper_qualification(self.conn, self.cfg, bot_id, row["genome_hash"],
+                                          genome["pair"], price, self.clock())
+            if reasons:
+                self._event("pilot_denied", f"{bot_id}: " + "; ".join(reasons))
+                return None
+        cap = min(float(risk["max_total_capital_usd"]),
+                  float(pilot["max_total_capital_usd"]), HARD_CAPITAL_CEILING_USD)
+        allocation = min(float(risk["max_per_bot_usd"]),
+                         float(pilot["max_per_bot_usd"]),
+                         cap - sum(a["allocation"] for a in live))
         min_cost = self._minimums("live", self._pair(bot_id))[1]
         if allocation < min_cost:
             return None
