@@ -44,6 +44,13 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
                      f"{g['worst']:.3f} | {g['deaths']} |")
     if gens:
         lines += ["", f"Best bot in the final generation: {gens[-1]['best_genome']}"]
+        ec = gens[-1].get("elite_coverage") or {}
+        if ec:
+            lines += ["", "## Elite search coverage (final generation)", "",
+                      "- Pairs: " + ", ".join(f"{p} {n}" for p, n in
+                                            ec.get("pairs", {}).items()),
+                      "- Entry types: " + ", ".join(f"{t} {n}" for t, n in
+                                                  ec.get("entry_types", {}).items())]
 
     lines += ["", "## Finalists (validation → one-time test)", ""]
     lines.append(f"Gate: a bot must have made money in every walk-forward train window on its "
@@ -53,6 +60,17 @@ def render(result: RunResult, conn: sqlite3.Connection) -> str:
                  "held back and kept their one-time test for a later run.")
     for note in result.gate_notes[:10]:
         lines.append(f"- held back: {note}")
+    lines.append("")
+    coverage = result.candidate_coverage
+    if coverage:
+        lines.append("Candidate pool coverage: " +
+                     ", ".join(f"{p} {n}" for p, n in coverage["pairs"].items()) +
+                     "; families: " +
+                     ", ".join(f"{t} {n}" for t, n in coverage["entry_types"].items()))
+    lines.append(f"Validation rejected {result.validation_rejected} strategies "
+                 "before they could access the untouched test period.")
+    for note in result.validation_notes[:10]:
+        lines.append(f"- failed validation: {note}")
     lines.append("")
     if not result.finalists:
         lines.append("No bot passed the gate and was profitable on validation data, so none was "
@@ -94,6 +112,10 @@ def short_summary(result: RunResult) -> str:
     if gens:
         lines.append(f"Best of the final generation: {gens[-1]['best_genome']}")
     lines.append(f"Gate held back {result.gate_rejected} of the top bots.")
+    lines.append(f"Validation rejected another {result.validation_rejected}; "
+                 "none of these used the untouched test period.")
+    if result.validation_notes:
+        lines.append("Main validation rejection: " + result.validation_notes[0][:250])
     if not result.finalists:
         lines.append("No finalist reached the unseen-data test. Nothing new goes to paper trading.")
     for f in result.finalists:
