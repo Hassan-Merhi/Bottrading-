@@ -197,3 +197,18 @@ def test_pilot_readiness_is_read_only_and_unfunded(dash):
     assert client.get("/api/status").json()["pilot"]["enabled"] is False
     page = client.get("/").text
     assert "Controlled live pilot" in page and "OFF — PAPER ONLY" in page
+
+
+def test_scaling_readiness_reports_zero_auto_funding(dash):
+    client, db = dash
+    response = client.get("/api/scaling/readiness")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is False
+    assert data["status"] == "blocked"
+    assert data["safe_to_auto_scale"] is False
+    assert data["approved_scale_cap_usd"] == 0
+    assert client.get("/api/status").json()["scaling"]["status"] == "blocked"
+    html = client.get("/").text
+    assert "Live performance &amp; capital scaling" in html
+    assert "OFF — NO SCALING" in html
