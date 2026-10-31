@@ -605,7 +605,8 @@ def shell_page(title: str, body: str, mode: str, heartbeat: str,
         '<div><div class="side-group-label">Workspace</div>'
         '<nav class="primary-nav" aria-label="Main">' + links + '</nav></div>'
         '<div class="side-foot">' + sidebar_notice +
-        '<div style="margin-top:12px"><a href="/graveyard">Failed strategies</a> · '
+        '<div style="margin-top:12px"><a href="/approvals">Owner approvals</a> · '
+        '<a href="/graveyard">Failed strategies</a> · '
         '<a href="/api/status">System data</a></div></div></aside>'
         '<div class="app-area"><header class="top"><div class="bar">'
         '<div class="top-copy"><span class="top-eyebrow">Trading overview</span>'
