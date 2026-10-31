@@ -288,6 +288,12 @@ def shell_page(title: str, body: str, mode: str, heartbeat: str,
                    escape(name) + '</a>' for href, name in subnav) + '</nav>') if subnav else ''
     mode_badge = ('<span class="mode live">REAL MONEY</span>' if mode == "LIVE"
                   else '<span class="mode paper">FAKE MONEY ONLY</span>')
+    sidebar_notice = (
+        '<strong>Real-money mode</strong>Live trading can lose actual funds. '
+        'Review the Safety and Settings sections.'
+        if mode == "LIVE" else
+        '<strong>Research mode</strong>Your experimental bots use fake money. '
+        'Performance is simulated, not a guarantee of earnings.')
     switch = ('<div class="view-switch" role="group" aria-label="Dashboard detail level">'
               '<a href="/" data-set-view="simple" ' +
               ('aria-current="true"' if current == "home" else 'aria-current="false"') +
@@ -307,9 +313,7 @@ def shell_page(title: str, body: str, mode: str, heartbeat: str,
         '<span class="brand-note" style="display:block">Bot Control Center</span></span></a>'
         '<div><div class="side-group-label">Workspace</div>'
         '<nav class="primary-nav" aria-label="Main">' + links + '</nav></div>'
-        '<div class="side-foot"><strong>Research mode</strong>'
-        'Your experimental bots use fake money. Performance is simulated, '
-        'not a guarantee of earnings.'
+        '<div class="side-foot">' + sidebar_notice +
         '<div style="margin-top:12px"><a href="/graveyard">Failed strategies</a> · '
         '<a href="/api/status">System data</a></div></div></aside>'
         '<div class="app-area"><header class="top"><div class="bar">'
