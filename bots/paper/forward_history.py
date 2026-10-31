@@ -120,7 +120,9 @@ def forward_history(conn: sqlite3.Connection, cfg: dict, name: str = "all",
     wins = sum(int(a["wins"]) for a in selected)
     fees = sum(float(a["fees"]) for a in selected)
     equity = sum(float(a["last_equity"]) for a in selected)
-    valid_observed = [int(p["observed_ms"]) for p in rows if p["observed_ms"] is not None]
+    valid_observed = [int(p["observed_ms"]) for p in rows
+                      if p["observed_ms"] is not None and
+                      p["quote_source"] == "kraken_ticker"]
     days = {datetime.fromtimestamp(ts / 1000, timezone.utc).date() for ts in valid_observed}
     benchmark_pnl = rows[-1]["benchmark_net_pnl"] if rows else 0.0
     stats = {
