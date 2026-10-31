@@ -37,6 +37,15 @@ def compute_signals(s: Series, g: Genome, ctx: MarketContext | None = None
         entry = ind.crosses_above(r, np.full_like(r, g.rsi_low))
         exit_ = r > g.rsi_high
         warmup = RSI_PERIOD * 3
+    elif g.entry_type == "trend_pullback":
+        # Research-only hypothesis until it passes all unchanged historical gates.
+        # All indicators use completed candles, with no test-period leakage.
+        fast, slow = ind.ema(c, g.fast_period), ind.ema(c, g.slow_period)
+        r = ind.rsi(c, RSI_PERIOD)
+        entry = ((fast > slow) & (c > fast) &
+                 ind.crosses_above(r, np.full_like(r, g.rsi_low)))
+        exit_ = (c < slow) | (r >= g.rsi_high)
+        warmup = max(g.slow_period, RSI_PERIOD * 3)
     elif g.entry_type == "breakout":
         hi = ind.prior_rolling_max(s.high, g.breakout_window)
         lo = ind.prior_rolling_min(s.low, max(2, g.breakout_window // 2))
@@ -112,6 +121,8 @@ def signal_key(g: Genome) -> tuple:
             g.mood_min, g.mood_max)
     if g.entry_type in ("ema_cross", "macd"):
         return base + (g.fast_period, g.slow_period)
+    if g.entry_type == "trend_pullback":
+        return base + (g.fast_period, g.slow_period, g.rsi_low, g.rsi_high)
     if g.entry_type == "rsi_reversion":
         return base + (g.rsi_low, g.rsi_high)
     if g.entry_type == "volume_spike":

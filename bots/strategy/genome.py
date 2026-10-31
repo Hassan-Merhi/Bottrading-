@@ -13,8 +13,8 @@ from dataclasses import asdict, dataclass, fields
 PAIRS = ("BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "LINK/USD", "ADA/USD", "DOGE/USD",
          "NEAR/USD", "LTC/USD", "SUI/USD", "AAVE/USD", "UNI/USD", "AVAX/USD", "XLM/USD")
 TIMEFRAMES = ("15m", "1h", "4h")
-ENTRY_TYPES = ("ema_cross", "rsi_reversion", "breakout", "macd", "volume_spike",
-               "squeeze_breakout")
+ENTRY_TYPES = ("ema_cross", "rsi_reversion", "trend_pullback", "breakout", "macd",
+               "volume_spike", "squeeze_breakout")
 TREND_FILTERS = ("none", "own_daily", "btc_daily")
 STOP_MODES = ("fixed", "atr")  # fixed: stop_loss_pct below entry; atr: atr_mult x ATR(atr_period)
 
@@ -53,7 +53,7 @@ CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
 SEARCH_FLOORS = {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "position_size_pct": 30.0}
 # Newcomers and timeframe mutations favour slower candles, where moves are large
 # enough to clear fees. 15m stays possible, just rarer.
-TIMEFRAME_WEIGHTS = {"15m": 1.0, "1h": 2.0, "4h": 2.0}
+TIMEFRAME_WEIGHTS = {"15m": 1.0, "1h": 3.0, "4h": 2.0}
 MIN_FAST_SLOW_GAP = 5
 MIN_MOOD_SPAN = 10
 # Values for genes added after the first release, so stored genomes still load.
@@ -109,6 +109,7 @@ class Genome:
         rule = {
             "ema_cross": f"EMA {self.fast_period}/{self.slow_period} cross",
             "rsi_reversion": f"RSI rebound above {self.rsi_low}, exit above {self.rsi_high}",
+            "trend_pullback": f"EMA {self.fast_period}/{self.slow_period} uptrend + RSI rebound",
             "breakout": f"{self.breakout_window}-candle breakout",
             "macd": f"MACD {self.fast_period}/{self.slow_period}/9 cross",
             "volume_spike": f"volume {self.vol_mult:.1f}x spike + {self.fast_period}-candle high",
@@ -180,8 +181,10 @@ def random_genome(rng: random.Random, pairs=PAIRS, timeframes=TIMEFRAMES,
     for name, (lo, hi, is_int) in NUMERIC_GENES.items():
         lo = SEARCH_FLOORS.get(name, lo)
         v[name] = rng.randint(int(lo), int(hi)) if is_int else rng.uniform(lo, hi)
-    if rng.random() < 0.5:  # half the newcomers ignore market mood
+    if rng.random() < 0.75:  # prioritize observable signals while retaining strict validation
         v["mood_min"], v["mood_max"] = 0, 100
+    if rng.random() < 0.65:
+        v["trend_filter"] = "none"  # avoid starving new signals with stacked filters
     if rng.random() < 0.5:  # half have no trailing stop
         v["trail_pct"] = 0.0
     if rng.random() < 0.5:  # half hold until stop, target or exit signal

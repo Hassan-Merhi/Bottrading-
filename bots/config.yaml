@@ -159,6 +159,17 @@ graduation:
   owner_approval_required: true
 
 # ---------------------------------------------------------------------------
+# Autonomous research: read-only Google News and (optional) Google search.
+# Experimental paper league never qualifies any bot for funded trading.
+# ---------------------------------------------------------------------------
+research:
+  enabled: true
+  hour_utc: 6
+research_league:
+  enabled: true
+  allocation_usd: 20
+
+# ---------------------------------------------------------------------------
 # RISK RULES (section 6). Non-negotiable. Ask the owner before changing.
 # ---------------------------------------------------------------------------
 # Mode is PAPER unless ALL THREE hold: env MODE=LIVE, live_enabled: true below,

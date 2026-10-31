@@ -181,6 +181,13 @@ def cmd_digest(cfg, conn, args) -> None:
         make_alerter(cfg).alert(for_telegram(text), kind="report")
 
 
+def cmd_research(cfg, conn, args) -> None:
+    """Fetch public research and summarize research failures; cannot trade."""
+    import json
+    from bots.research.agent import run_research
+    print(json.dumps(run_research(conn, cfg), indent=2))
+
+
 def cmd_backup(cfg, conn, args) -> None:
     from bots.worker import backup_database, send_offsite_backup
 
@@ -282,6 +289,7 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--no-dashboard", action="store_true")
     sub.add_parser("dashboard", help="serve the dashboard only")
     sub.add_parser("report", help="print today's report")
+    sub.add_parser("research", help="read-only Google News research and evolution feedback")
     bk = sub.add_parser("backup", help="back up the database")
     bk.add_argument("--send", action="store_true",
                     help="also send a copy without price candles to your Telegram chat")
@@ -302,7 +310,8 @@ def main(argv: list[str] | None = None) -> None:
     conn = connect(db_path)
     {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update, "fetch-mood": cmd_fetch_mood,
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
-     "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "watchdog": cmd_watchdog,
+     "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "research": cmd_research,
+     "watchdog": cmd_watchdog,
      "confirm-live": cmd_confirm_live, "audit-live": cmd_audit_live}[args.cmd](cfg, conn, args)
 
 
