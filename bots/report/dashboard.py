@@ -10,6 +10,8 @@ DASHBOARD_TOKEN env value; without it set, approvals work only from Telegram.
 from __future__ import annotations
 
 import datetime as _dt
+import csv
+import io
 import hmac
 import json
 import os
@@ -17,7 +19,7 @@ from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from bots.analyst.digest import latest_digest
 from bots.data.fetch import BACKFILL_DONE
@@ -31,6 +33,8 @@ from bots.live.pilot import pilot_status
 from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
 from bots.paper.league import snapshot as lab_snapshot
+from bots.paper.forward_history import forward_history
+from bots.report.forward_page import history_page, overview_panel
 from bots.research.agent import snapshot as research_snapshot
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
@@ -334,6 +338,7 @@ def page(title: str, body: str, mode: str = "PAPER", heartbeat: str = "",
          tabs: list[tuple[str, str]] | None = None, alive: bool = True) -> str:
     tabs = OVERVIEW_TABS if tabs is None else tabs
     nav = "".join(f'<a href="{href}">{escape(label)}</a>' for href, label in tabs)
+    nav += '<a href="/research/forward">Forward evidence</a>'
     nav += '<a href="/graveyard">Graveyard</a><a href="/api/status">JSON</a>'
     mode_cls = "live" if mode == "LIVE" else "paper"
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -393,6 +398,65 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         conn = db()
         try:
             return JSONResponse(research_snapshot(conn, cfg))
+        finally:
+            conn.close()
+
+    @app.get("/api/research/forward")
+    def research_forward_api(name: str = "all", limit: int = 720):
+        conn = db()
+        try:
+            try:
+                return JSONResponse(forward_history(conn, cfg, name=name, limit=limit))
+            except ValueError:
+                raise HTTPException(404, "Unknown research bot") from None
+        finally:
+            conn.close()
+
+    @app.get("/api/research/forward.csv")
+    def research_forward_csv(name: str = "all", kind: str = "equity"):
+        if kind not in ("equity", "trades"):
+            raise HTTPException(400, "kind must be equity or trades")
+        conn = db()
+        try:
+            try:
+                result = forward_history(conn, cfg, name=name, limit=1440, fills_limit=500)
+            except ValueError:
+                raise HTTPException(404, "Unknown research bot") from None
+        finally:
+            conn.close()
+        output = io.StringIO()
+        writer = csv.writer(output)
+        if kind == "equity":
+            fields = ["candle_ts", "observed_ms", "equity", "net_pnl",
+                      "benchmark_equity", "benchmark_net_pnl", "quote_source"]
+            writer.writerow(fields)
+            for row in result["observations"]:
+                writer.writerow([row.get(k) for k in fields])
+        else:
+            fields = ["id", "name", "ts", "side", "qty", "price", "fee", "pnl", "reason"]
+            writer.writerow(fields)
+            for row in reversed(result["fills"]):
+                writer.writerow([row.get(k) for k in fields])
+        return Response(content=output.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="paper-forward-{kind}.csv"'})
+
+    @app.get("/research/forward", response_class=HTMLResponse)
+    def forward_evidence_page(name: str = "all"):
+        conn = db()
+        try:
+            try:
+                result = forward_history(conn, cfg, name=name)
+            except ValueError:
+                raise HTTPException(404, "Unknown research bot") from None
+            state = RiskState(conn)
+            now = now_ms()
+            hb = state.get(HEARTBEAT)
+            alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
+            return page("Forward paper results", history_page(result),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/", "Dashboard"), ("#equity", "Equity history"),
+                              ("#trades", "Trade ledger")], alive=alive)
         finally:
             conn.close()
 
@@ -789,7 +853,8 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
         '<div class="tile"><span class="lbl">Mode</span><b>PAPER ONLY</b></div></div>'
         '<div class="status" style="margin-top:12px"><h3>Live forward experiments</h3>'
         + (lab_rows or '<p class="help">Initializing after a fresh closed Kraken candle.</p>')
-        + '</div></section>')
+        + '</div>' + overview_panel(forward_history(conn, cfg))
+        + '</section>')
     research = research_snapshot(conn, cfg)
     news = research.get("sources", [])
     source_rows = "".join(

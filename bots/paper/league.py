@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS lab_marks (
  candle_ts INTEGER NOT NULL,
  equity REAL NOT NULL,
  mark_price REAL NOT NULL,
+ observed_ms INTEGER,
+ quote_source TEXT,
  PRIMARY KEY(name, candle_ts)
 );
 """
@@ -64,6 +66,13 @@ CREATE TABLE IF NOT EXISTS lab_marks (
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Legacy paper marks retain NULL provenance. Never backdate their observed time.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(lab_marks)")}
+    if "observed_ms" not in columns:
+        conn.execute("ALTER TABLE lab_marks ADD COLUMN observed_ms INTEGER")
+    if "quote_source" not in columns:
+        conn.execute("ALTER TABLE lab_marks ADD COLUMN quote_source TEXT")
+    conn.commit()
 
 
 def research_genomes() -> dict[str, Genome]:
@@ -140,6 +149,7 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
             continue
         if not math.isfinite(mark_price) or mark_price <= 0:
             continue
+        quote_source = "kraken_ticker" if price_source is not None else "closed_candle_simulator"
         row = conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone()
         if row is None:
             # Begin now with no retroactive signals/fills or fabricated observed days.
@@ -148,8 +158,11 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
                          "hold_start_price,last_candle_ts,started_ms) VALUES(?,?,?,?,?,?,?,?,?)",
                          (name, genome.pair, genome.to_json(), initial, initial,
                           initial, mark_price, candle, now))
-            conn.execute("INSERT OR IGNORE INTO lab_marks VALUES(?,?,?,?)",
-                         (name, candle, initial, mark_price))
+            conn.execute(
+                "INSERT OR IGNORE INTO lab_marks"
+                "(name,candle_ts,equity,mark_price,observed_ms,quote_source)"
+                " VALUES(?,?,?,?,?,?)",
+                (name, candle, initial, mark_price, now, quote_source))
             conn.commit()
             continue
         if candle <= row["last_candle_ts"]:
@@ -208,8 +221,11 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
             "fees=?,closed_trades=?,wins=?,last_candle_ts=? WHERE name=?",
             (cash, qty, entry_price, entry_cost, entry_ts, stop, target, peak, equity,
              drawdown, total_fees, trades, wins, candle, name))
-        conn.execute("INSERT OR IGNORE INTO lab_marks VALUES(?,?,?,?)",
-                     (name, candle, equity, mark_price))
+        conn.execute(
+            "INSERT OR IGNORE INTO lab_marks"
+            "(name,candle_ts,equity,mark_price,observed_ms,quote_source)"
+            " VALUES(?,?,?,?,?,?)",
+            (name, candle, equity, mark_price, now, quote_source))
         processed += 1
     conn.commit()
     return {"enabled": True, "processed": processed}
