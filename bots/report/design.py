@@ -11,7 +11,7 @@ NAV = (
     ("home", "Home", "/", "01"),
     ("bots", "My Bots", "/bots", "02"),
     ("performance", "Performance", "/research/forward", "03"),
-    ("learning", "Learning & Research", "/advanced#evolution", "04"),
+    ("learning", "Learning & Research", "/learning", "04"),
     ("safety", "Safety", "/advanced#status", "05"),
     ("settings", "Settings", "/advanced#limits", "06"),
 )
@@ -304,6 +304,88 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .equity-chart-tip{font-size:12px;color:var(--ink-2);margin-top:8px;
  padding:11px 13px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
  font-variant-numeric:tabular-nums;min-height:42px}
+
+
+/* Phase 3: human-readable learning timeline, research and rejection charts */
+.learning-kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:13px;margin:18px 0}
+.learning-kpi{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:17px;
+ box-shadow:var(--shadow);display:flex;flex-direction:column;gap:7px}
+.learning-kpi strong{font-size:26px;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:var(--ink)}
+.learning-kpi small{color:var(--ink-3);font-size:12px;line-height:1.45}
+.learn-warning{padding:15px 18px;border-radius:14px;background:var(--paper-soft);
+ border:1px solid var(--line);display:grid;gap:4px;margin:17px 0;font-size:13px}
+.learn-warning b{color:var(--accent)}
+.learn-warning span{color:var(--ink-2)}
+.learning-funnel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:17px 0}
+.learn-step{display:flex;flex-direction:column;gap:10px;border:1px solid var(--line);border-radius:13px;
+ background:var(--panel-2);padding:14px}
+.learn-step .step-icon{flex:0 0 30px;width:30px}
+.learn-step b{font-size:13px}
+.learn-step span.help{font-size:12px;display:block;margin:6px 0 0}
+.learn-step strong{font-size:18px;white-space:normal;margin-top:auto}
+.learn-strategy-list,.research-cards,.failure-records{display:grid;gap:10px}
+.learning-strategy,.research-card,.failure-record{border:1px solid var(--line);
+ background:var(--panel-2);padding:15px 17px;border-radius:13px}
+.learn-strategy-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.learning-strategy p,.research-card p{font-size:12px;color:var(--ink-2);line-height:1.6}
+.learn-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}
+.learn-metrics span{display:grid;gap:3px;font-size:11px;color:var(--ink-3)}
+.learn-metrics b{font-size:14px;color:var(--ink)}
+.learning-strategy details summary,.research-card details summary{cursor:pointer;font-size:12px;
+ color:var(--accent);font-weight:720}
+.failure-chart{display:grid;gap:12px;margin:18px 0}
+.failure-bar-row{display:grid;grid-template-columns:minmax(165px,1fr) 2.2fr 100px;
+ gap:12px;align-items:center;text-decoration:none;color:var(--ink);font-size:12px}
+.failure-bar-label{font-weight:690;color:var(--ink-2)}
+.failure-bar-track{display:block;height:13px;border-radius:10px;overflow:hidden;background:var(--panel-2);
+ border:1px solid var(--line)}
+.failure-bar-track i{display:block;height:100%;background:var(--series-2);
+ border-radius:10px;transition:width .25s ease}
+.failure-bar-row strong{text-align:right;font-variant-numeric:tabular-nums}
+.failure-bar-row small{font-weight:500;color:var(--ink-3)}
+.failure-bar-row:hover .failure-bar-label{text-decoration:underline}
+.research-source{font-size:11px;color:var(--ink-3);font-weight:650}
+.research-card h3{font-size:15px;line-height:1.5;margin:8px 0 4px}
+.research-card h3 a{text-decoration:none;overflow-wrap:anywhere}
+.research-card h3 a:hover{text-decoration:underline}
+.research-card details p{overflow-wrap:anywhere}
+.research-notes{padding-left:20px;margin:0}
+.research-notes li{font-size:13px;padding:5px 0;color:var(--ink-2)}
+.learn-faq{display:grid;gap:9px}
+.learn-faq details{padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2)}
+.learn-faq summary{cursor:pointer;font-size:13px;font-weight:740}
+.learn-faq p{font-size:13px;color:var(--ink-2)}
+.learn-category-nav{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0 20px}
+.learn-category-nav a{border:1px solid var(--line);border-radius:999px;padding:8px 12px;
+ font-size:12px;font-weight:700;color:var(--ink-2);text-decoration:none;background:var(--panel)}
+.learn-category-nav a[aria-current="page"],.learn-category-nav a:hover{background:var(--paper-soft);
+ border-color:var(--accent);color:var(--accent)}
+.failure-record summary{display:flex;align-items:center;justify-content:space-between;gap:12px;
+ cursor:pointer}
+.failure-record summary span:first-child{display:grid;gap:5px;min-width:0}
+.failure-record summary b{font-size:13px;overflow-wrap:anywhere}
+.failure-record summary small{font-size:11px;color:var(--ink-3)}
+.failure-record summary .status-pill{max-width:32%;overflow-wrap:anywhere;font-size:10px}
+.failure-record p{font-size:13px;overflow-wrap:anywhere}
+.learn-pages{display:flex;gap:10px;margin:16px 0;flex-wrap:wrap}
+.learn-pages a{padding:10px 14px;border:1px solid var(--line);border-radius:9px;
+ font-weight:700;font-size:12px;text-decoration:none;background:var(--panel-2)}
+@media(max-width:1200px){.learning-funnel{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){
+ .learning-funnel{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .learn-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .failure-bar-row{grid-template-columns:minmax(110px,1fr) 1.7fr 65px;gap:7px}
+ .failure-bar-row strong{font-size:11px}
+}
+@media(max-width:430px){
+ .learning-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .learning-kpi{padding:12px}
+ .learning-kpi strong{font-size:21px}
+ .learning-funnel{grid-template-columns:1fr}
+ .failure-bar-row{grid-template-columns:1fr 1fr;gap:4px}
+ .failure-bar-label{grid-column:span 2}
+ .failure-bar-row strong{order:3;text-align:right}
+}
 
 """
 NEXT_JS = """
