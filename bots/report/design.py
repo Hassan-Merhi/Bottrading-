@@ -309,13 +309,10 @@ button:disabled{opacity:.55;cursor:not-allowed}
 NEXT_JS = """
 (function(){
   var root=document.documentElement;
-  var themeKey='trading-dashboard-theme';
-  var viewKey='trading-dashboard-view';
+  var themeKey='trading-dashboard-theme', viewKey='trading-dashboard-view';
   try{
     var theme=localStorage.getItem(themeKey);
-    if(theme==='dark'||theme==='light'){root.setAttribute('data-theme',theme);}
-    // Respect the user's last detail level on a fresh root visit.
-    // A deliberate Home or My Bots click sets the simple preference first.
+    if(theme==='dark'||theme==='light')root.setAttribute('data-theme',theme);
     if(window.location.pathname==='/'&&!window.location.hash&&
        localStorage.getItem(viewKey)==='advanced'){
       window.location.replace('/advanced');return;
@@ -330,7 +327,7 @@ NEXT_JS = """
     el.addEventListener('click',function(){
       var now=root.getAttribute('data-theme');
       var dark=now==='dark'||(!now&&window.matchMedia&&
-                 window.matchMedia('(prefers-color-scheme: dark)').matches);
+               window.matchMedia('(prefers-color-scheme: dark)').matches);
       var next=dark?'light':'dark';
       root.setAttribute('data-theme',next);
       try{localStorage.setItem(themeKey,next);}catch(e){}
@@ -339,14 +336,39 @@ NEXT_JS = """
     el.textContent=root.getAttribute('data-theme')==='dark'?'Light theme':'Dark theme';
   });
 
-  // Display each real observed point, without inventing intermediary prices.
+  // Genuine observed marks only: never interpolate missing hours or create fills.
   document.querySelectorAll('.forward-equity[data-points]').forEach(function(svg){
     var points, at=0;
     try{points=JSON.parse(svg.getAttribute('data-points'));}catch(e){return;}
-    if(!points||!points.length)return;
+    if(!points || points.length<2)return;
     var info=svg.parentElement.querySelector('.equity-chart-tip');
     if(!info)return;
-    function cash(n){return (n>=0?'+':'')+'
+    function cash(n){return (n>=0?'+':'')+String.fromCharCode(36)+Number(n).toFixed(2);}
+    function show(i){
+      at=Math.max(0,Math.min(points.length-1,i));
+      var p=points[at];
+      var date=p.ts ? new Date(p.ts).toISOString().replace('T',' ').slice(0,16)+' UTC' :
+                 'Earlier mark without verified timestamp';
+      info.textContent=date+' · Net '+cash(p.pnl)+' · Buy and hold '+cash(p.hold);
+    }
+    svg.addEventListener('pointermove',function(e){
+      var rect=svg.getBoundingClientRect();
+      if(!rect.width)return;
+      var fraction=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
+      var logical=fraction*790;
+      show(Math.round((logical-80)/690*(points.length-1)));
+    });
+    svg.addEventListener('click',function(){show(at);});
+    svg.addEventListener('focus',function(){show(at);});
+    svg.addEventListener('keydown',function(e){
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+        e.preventDefault();
+        show(at+(e.key==='ArrowRight'?1:-1));
+      }
+    });
+  });
+})();
+"""
 
 
 def shell_page(title: str, body: str, mode: str, heartbeat: str,
