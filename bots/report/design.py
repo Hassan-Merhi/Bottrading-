@@ -235,6 +235,12 @@ NEXT_JS = """
   try{
     var theme=localStorage.getItem(themeKey);
     if(theme==='dark'||theme==='light'){root.setAttribute('data-theme',theme);}
+    // Respect the user's last detail level on a fresh root visit.
+    // A deliberate Home or My Bots click sets the simple preference first.
+    if(window.location.pathname==='/'&&!window.location.hash&&
+       localStorage.getItem(viewKey)==='advanced'){
+      window.location.replace('/advanced');return;
+    }
   }catch(e){}
   document.querySelectorAll('[data-set-view]').forEach(function(el){
     el.addEventListener('click',function(){
@@ -244,7 +250,9 @@ NEXT_JS = """
   document.querySelectorAll('[data-toggle-theme]').forEach(function(el){
     el.addEventListener('click',function(){
       var now=root.getAttribute('data-theme');
-      var next=now==='dark'?'light':'dark';
+      var dark=now==='dark'||(!now&&window.matchMedia&&
+                 window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var next=dark?'light':'dark';
       root.setAttribute('data-theme',next);
       try{localStorage.setItem(themeKey,next);}catch(e){}
       el.textContent=next==='dark'?'Light theme':'Dark theme';
