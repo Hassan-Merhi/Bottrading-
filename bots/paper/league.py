@@ -97,6 +97,8 @@ def _series(conn: sqlite3.Connection, pair: str, now: int):
     one_hour = resample(df, "15m", "1h")
     if len(one_hour) < 55:
         return None
+    if not (one_hour.ts.diff().dropna().tail(70) == TIMEFRAME_MS["1h"]).all():
+        return None
     latest = int(one_hour.ts.iloc[-1])
     if now < latest + TIMEFRAME_MS["1h"] or now - (latest + TIMEFRAME_MS["1h"]) > 2 * TIMEFRAME_MS["1h"]:
         return None
@@ -110,7 +112,7 @@ def _fill(conn, name, now, side, qty, price, fee, pnl, reason):
 
 
 def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
-         allow_entries: bool = True) -> dict:
+         allow_entries: bool = True, price_source=None) -> dict:
     """Process each NEW closed hourly candle once; never replay missed simulated trades."""
     lab = cfg.get("research_league") or {}
     if not lab.get("enabled", False):
@@ -129,7 +131,13 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
         if s is None:
             continue
         candle = int(s.ts[-1])
-        mark_price = float(s.close[-1])
+        # An actual observed ticker is the forward execution reference in production;
+        # historical closed-candle values are only used to calculate signals.
+        try:
+            mark_price = (float(price_source.fetch_ticker(genome.pair)["last"])
+                          if price_source is not None else float(s.close[-1]))
+        except Exception:  # noqa: BLE001 - no fabricated fill on quote failure
+            continue
         if not math.isfinite(mark_price) or mark_price <= 0:
             continue
         row = conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone()
