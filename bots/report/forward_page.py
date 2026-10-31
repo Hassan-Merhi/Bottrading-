@@ -150,7 +150,7 @@ def history_page(data: dict) -> str:
         'round trip using the same taker fees, spreads and slippage. Past paper '
         'performance cannot guarantee real profitability.</p>'
         '</section><section id="trades"><h2>Observed simulated buys and sells</h2>'
-        '<p class="help">Immutable-by-design append-only trade events. Net realized '
+        '<p class="help">Recorded simulated trade events. Net realized '
         'P&amp;L on SELL includes both entry and exit costs; BUY P&amp;L is blank '
         'until the position closes. Rows show the newest trades first.</p>'
         + _trades_table(data["fills"])
@@ -167,7 +167,8 @@ def overview_panel(data: dict) -> str:
     text = escape(_utc(latest["observed_ms"])) if latest else "No observed marks yet"
     return (
         '<div style="margin:16px 0"><h3>Actual forward paper evidence</h3>'
-        '<p class="help">Recorded forward marks: ' + str(stats["observed_hours"]) +
+        '<p class="help">Recorded equity marks: ' + str(stats["recorded_marks"]) +
+        ' · verified forward hours: ' + str(stats["observed_hours"]) +
         ' · Completed trades: ' + str(stats["completed_trades"]) +
         ' · Last observed: ' + text + '</p>'
         + equity_chart(data["observations"])
