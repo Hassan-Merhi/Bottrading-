@@ -82,7 +82,7 @@ def test_empty_learning_is_candid(cfg, conn):
     assert "No evolution run has finished yet" in html
     assert "No strategy rejections have been recorded" in html
     assert "does not guarantee future profit" in html
-    assert "not evidence of positive future" in d["explanation"]
+    assert "not proof of positive future" in d["explanation"]
 
 
 def test_actual_history_and_labelled_training_not_profit(cfg, conn):
