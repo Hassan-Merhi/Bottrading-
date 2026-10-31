@@ -30,14 +30,17 @@ EXPLANATIONS = {
 
 
 def _card(name, pair, equity, pnl, status, url, category):
-    tone = "pos" if pnl > 0 else "neg" if pnl < 0 else ""
+    tone = ("pos" if pnl is not None and pnl > 0 else
+            "neg" if pnl is not None and pnl < 0 else "")
     return (
         '<article class="bot-directory-card"><div class="bot-directory-top">'
         '<div><h3>' + escape(name) + '</h3><span>' + escape(pair) + '</span></div>'
         '<span class="status-pill">' + escape(category) + '</span></div>'
         '<div class="bot-directory-value">' + escape(cash(equity)) + '</div>'
-        '<div class="' + tone + '">' + escape(cash(pnl, True)) +
-        ' since start</div><p>' + escape(status) + '</p>'
+        '<div class="' + tone + '">' +
+        escape(cash(pnl, True) + ' since start' if pnl is not None else
+               'No results recorded yet') +
+        '</div><p>' + escape(status) + '</p>'
         '<a class="button-link" href="' + escape(url, quote=True) +
         '">View details →</a></article>')
 
@@ -50,7 +53,7 @@ def bots_index(conn, cfg: dict) -> str:
         b = present.get(name)
         url = "/bots/research/" + bot_slug(name)
         if b is None:
-            research.append(_card(name, genome.pair, 0, 0,
+            research.append(_card(name, genome.pair, None, None,
                                   "Not initialized; waiting for a valid hourly market observation.",
                                   url, "Fake-money experiment"))
         else:
