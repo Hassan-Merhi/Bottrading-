@@ -64,8 +64,9 @@ def test_every_shell_uses_same_nav_and_accessible_toggle():
     assert 'data-set-view="simple"' in html
     assert 'data-set-view="advanced"' in html
     assert 'href="/research/forward"' in html
-    assert 'href="/advanced#status"' in html
-    assert 'href="/advanced#limits"' in html
+    assert 'href="/safety"' in html
+    assert 'href="/settings"' in html
+    assert 'href="/learning"' in html
     assert "__BASE_CSS__" in html
     assert "__BASE_JS__" in html
 
