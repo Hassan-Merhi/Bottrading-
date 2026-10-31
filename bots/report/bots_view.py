@@ -101,10 +101,23 @@ def bots_index(conn, cfg: dict) -> str:
 
 def research_detail(conn, cfg: dict, now: int, name: str, period: str) -> str:
     genome = research_genomes()[name]
+    exists = bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='lab_accounts' AND type='table'").fetchone())
+    account = (conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone()
+               if exists else None)
+    if account is None:
+        title, description = EXPLANATIONS[name]
+        return (
+            '<div class="home-heading"><span class="home-eyebrow">Fake-money experiment</span>'
+            '<h1>' + escape(name) + '</h1><p>' + escape(title) + '</p></div>'
+            '<div class="status-pill">Not started yet · Simulation only</div>'
+            '<section><h2>What does this bot do?</h2><p>' + escape(description) +
+            '</p><div class="home-empty"><b>No recorded trades or balances yet.</b>'
+            '<p>The research account will appear after a valid new market observation. '
+            'No historical results will be invented.</p></div>'
+            '<details class="rule-details"><summary>Technical strategy rules</summary><p>' +
+            escape(genome.describe()) + '</p></details></section>')
     data = report(conn, cfg, now=now, name=name, period=period)
-    account = conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone() if (
-        conn.execute("SELECT 1 FROM sqlite_master WHERE name='lab_accounts'").fetchone()
-    ) else None
     st = data["all_time"]
     s = data["period_stats"]
     title, description = EXPLANATIONS.get(name, ("Experimental strategy",
