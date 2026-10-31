@@ -108,7 +108,35 @@ def test_signals_never_use_future_candles(entry_type):
     cut_e, cut_x = compute_signals(make_series(o2, np.maximum(o2, c2) * 1.005,
                                                np.minimum(o2, c2) * 0.995, c2, volume=vol2), g)
     assert (full_e[:k] == cut_e[:k]).all() and (full_x[:k] == cut_x[:k]).all()
-    assert full_e.any()
+    # The combined RSI rebound + two EMA + close-above-fast rule is deliberately
+    # rare: this random sample need not contain a qualifying trend_pullback.
+    # Non-emptiness is tested with a separate deterministic, valid opportunity.
+    if entry_type != "trend_pullback":
+        assert full_e.any()
+
+
+def test_trend_pullback_emits_entries_for_a_valid_observed_pattern():
+    """Positive control: preserve the original strict signal conditions."""
+    rng = np.random.default_rng(3)
+    close = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, 900)))
+    opened = np.r_[close[0], close[:-1]]
+    high = np.maximum(opened, close) * 1.005
+    low = np.minimum(opened, close) * 0.995
+    genome = base_genome(entry_type="trend_pullback", fast_period=8, slow_period=150,
+                         rsi_low=40, rsi_high=65)
+    entry, exit_ = compute_signals(make_series(opened, high, low, close), genome)
+    assert entry.any()  # actual qualifying opportunities, not a forced signal
+    assert exit_.any()
+    # Adding future data never changes a signal already generated.
+    k = 450
+    changed = close.copy()
+    changed[k:] *= 1.11
+    opened2 = np.r_[changed[0], changed[:-1]]
+    entry2, exit2 = compute_signals(
+        make_series(opened2, np.maximum(opened2, changed) * 1.005,
+                    np.minimum(opened2, changed) * 0.995, changed), genome)
+    np.testing.assert_array_equal(entry[:k], entry2[:k])
+    np.testing.assert_array_equal(exit_[:k], exit2[:k])
 
 
 def test_signal_cache_reuses_results():

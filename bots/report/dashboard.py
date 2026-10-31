@@ -32,10 +32,21 @@ from bots.paper.forward import evidence, net_hold_return, history
 from bots.live.pilot import pilot_status
 from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
+from bots.report.home import home_dashboard
+from bots.report.performance import report as performance_report, export_csv as performance_csv, resolve_bot_slug, validate as validate_performance
+from bots.report.performance_view import performance_page
+from bots.report.bots_view import bots_index, research_detail, standard_account_detail
+from bots.report.design import shell_page
 from bots.paper.league import snapshot as lab_snapshot
 from bots.paper.forward_history import forward_history
 from bots.report.forward_page import history_page, overview_panel
 from bots.research.agent import snapshot as research_snapshot
+from bots.report.learning_data import (report as learning_report,
+                                      source_list as learning_sources,
+                                      failure_list as learning_failures)
+from bots.report.learning_view import learning_page, source_page, failure_page
+from bots.report.safety_data import snapshot as safety_snapshot
+from bots.report.safety_view import safety_page, settings_page, approval_page
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
@@ -335,21 +346,15 @@ OVERVIEW_TABS = [("#status", "Status"), ("#league", "Paper league"), ("#research
 
 
 def page(title: str, body: str, mode: str = "PAPER", heartbeat: str = "",
-         tabs: list[tuple[str, str]] | None = None, alive: bool = True) -> str:
-    tabs = OVERVIEW_TABS if tabs is None else tabs
-    nav = "".join(f'<a href="{href}">{escape(label)}</a>' for href, label in tabs)
-    nav += '<a href="/research/forward">Forward evidence</a>'
-    nav += '<a href="/graveyard">Graveyard</a><a href="/api/status">JSON</a>'
-    mode_cls = "live" if mode == "LIVE" else "paper"
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<meta name="theme-color" content="#2563eb">'
-            f'<title>{escape(title)}</title><style>{CSS}</style></head><body>'
-            f'<header class="top"><div class="bar"><a href="/" class="brand" '
-            f'style="color:inherit;text-decoration:none"><i class="{"" if alive else "off"}"></i>'
-            f'Trading Bots</a><span class="mode {mode_cls}">{escape(mode)}</span>'
-            f'<span class="hb">{heartbeat}</span></div><nav class="tabs">{nav}</nav></header>'
-            f'<main>{body}</main><script>{JS}</script></body></html>')
+         tabs: list[tuple[str, str]] | None = None, alive: bool = True,
+         current: str = "home") -> str:
+    """Shared shell: the same navigation and styling on every page.
+
+    The legacy technical sections remain fully accessible under /advanced.
+    Rendered data is unchanged; only presentation and routing are new.
+    """
+    html = shell_page(title, body, mode, heartbeat, tabs, current=current, alive=alive)
+    return html.replace("__BASE_CSS__", CSS).replace("__BASE_JS__", JS)
 
 
 def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastAPI:
@@ -441,22 +446,232 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
                         headers={"Content-Disposition":
                                  f'attachment; filename="paper-forward-{kind}.csv"'})
 
-    @app.get("/research/forward", response_class=HTMLResponse)
-    def forward_evidence_page(name: str = "all"):
+    def verified_performance(conn, name: str, period: str, side: str,
+                             result: str, search: str) -> dict:
+        # A URL must never create an arbitrary lab identity or bypass read-only
+        # accounting views. Only the three fixed research experiments are valid.
+        from bots.paper.league import research_genomes
+        if name != "all" and name not in research_genomes():
+            raise HTTPException(404, "Unknown research experiment")
+        try:
+            return performance_report(conn, cfg, now_ms(), name=name, period=period,
+                                      side=side, result=result, search=search)
+        except ValueError:
+            raise HTTPException(400, "Invalid performance filter") from None
+
+    @app.get("/api/performance")
+    def performance_api(name: str = "all", period: str = "7d",
+                        side: str = "all", result: str = "all", search: str = ""):
         conn = db()
         try:
-            try:
-                result = forward_history(conn, cfg, name=name)
-            except ValueError:
-                raise HTTPException(404, "Unknown research bot") from None
+            return JSONResponse(verified_performance(conn, name, period, side, result, search))
+        finally:
+            conn.close()
+
+    @app.get("/api/performance.csv")
+    def performance_export(name: str = "all", period: str = "7d",
+                           side: str = "all", result: str = "all",
+                           search: str = "", kind: str = "trades"):
+        if kind not in ("trades", "equity"):
+            raise HTTPException(400, "Invalid CSV export kind")
+        conn = db()
+        try:
+            result_data = verified_performance(conn, name, period, side, result, search)
+            data = performance_csv(result_data, kind)
+        finally:
+            conn.close()
+        return Response(content=data, media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="forward-paper-{kind}-{period}.csv"',
+                                 "Cache-Control": "no-store"})
+
+    @app.get("/research/forward", response_class=HTMLResponse)
+    def forward_evidence_page(name: str = "all", period: str = "7d",
+                              side: str = "all", result: str = "all",
+                              search: str = ""):
+        conn = db()
+        try:
+            data = verified_performance(conn, name, period, side, result, search)
             state = RiskState(conn)
             now = now_ms()
             hb = state.get(HEARTBEAT)
             alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
-            return page("Forward paper results", history_page(result),
+            return page("Profit and performance", performance_page(data),
                         summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
-                        tabs=[("/", "Dashboard"), ("#equity", "Equity history"),
-                              ("#trades", "Trade ledger")], alive=alive)
+                        tabs=[("/bots", "My Bots"), ("#equity", "Profit chart"),
+                              ("#fees", "Fees"), ("#trades", "Trade history")],
+                        alive=alive, current="performance")
+        finally:
+            conn.close()
+
+    @app.get("/bots", response_class=HTMLResponse)
+    def bots_directory():
+        conn = db()
+        try:
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            return page("My Trading Bots", bots_index(conn, cfg),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
+        finally:
+            conn.close()
+
+    @app.get("/bots/research/{slug}", response_class=HTMLResponse)
+    def bot_research_detail(slug: str, period: str = "7d"):
+        try:
+            name = resolve_bot_slug(slug)
+            validate_performance(period)
+        except ValueError:
+            raise HTTPException(404, "Unknown bot or invalid period") from None
+        conn = db()
+        try:
+            now = now_ms()
+            state = RiskState(conn)
+            hb = state.get(HEARTBEAT)
+            return page("Research bot: " + name, research_detail(conn, cfg, now, name, period),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/bots", "All bots"), ("#history", "Performance"),
+                              ("#activity", "Activity")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
+        finally:
+            conn.close()
+
+    @app.get("/bots/account/{account_id}", response_class=HTMLResponse)
+    def standard_bot_detail(account_id: int):
+        conn = db()
+        try:
+            now = now_ms()
+            state = RiskState(conn)
+            hb = state.get(HEARTBEAT)
+            try:
+                body = standard_account_detail(conn, account_id)
+            except ValueError:
+                raise HTTPException(404, "Unknown trading account") from None
+            return page("Trading bot account", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/bots", "All bots")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
+        finally:
+            conn.close()
+
+    @app.get("/api/learning/summary")
+    def learning_summary():
+        """Read-only historical learning status; not forward profitability."""
+        conn = db()
+        try:
+            return JSONResponse(learning_report(conn, cfg))
+        finally:
+            conn.close()
+
+    @app.get("/api/learning/sources")
+    def saved_research_sources(search: str = "", source: str = "",
+                               offset: int = 0, limit: int = 24):
+        conn = db()
+        try:
+            return JSONResponse(learning_sources(conn, search, source, offset, limit))
+        finally:
+            conn.close()
+
+    @app.get("/api/learning/failures")
+    def failed_strategy_history(scope: str = "all", category: str = "all",
+                                offset: int = 0, limit: int = 40):
+        conn = db()
+        try:
+            try:
+                return JSONResponse(learning_failures(conn, scope, category, offset, limit))
+            except ValueError:
+                raise HTTPException(400, "Unknown strategy failure filter") from None
+        finally:
+            conn.close()
+
+    @app.get("/learning", response_class=HTMLResponse)
+    def learning_explained():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = learning_report(conn, cfg)
+            sources = learning_sources(conn, limit=8)
+            return page("Learning and Research", learning_page(data, sources),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#learning-overview", "Pipeline"), ("#evolution", "Evolution"),
+                              ("#failures", "Failures"), ("#research", "News & sources")],
+                        alive=bool(hb) and 0 <= now - int(hb) < 3*60*60*1000,
+                        current="learning")
+        finally:
+            conn.close()
+
+    @app.get("/research/sources", response_class=HTMLResponse)
+    def source_library(search: str = "", source: str = "", offset: int = 0):
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            rows = learning_sources(conn, search, source, offset)
+            return page("Saved research sources", source_page(rows),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/learning#research", "Learning & Research")],
+                        alive=bool(hb) and 0 <= now-int(hb) < 3*60*60*1000,
+                        current="learning")
+        finally:
+            conn.close()
+
+    @app.get("/api/safety/overview")
+    def safety_overview():
+        """Read-only evidence: never exposes tokens or operates the guard."""
+        conn = db()
+        try:
+            return JSONResponse(safety_snapshot(conn, cfg, now_ms(),
+                                                bool(env.get("DASHBOARD_TOKEN"))))
+        finally:
+            conn.close()
+
+    @app.get("/safety", response_class=HTMLResponse)
+    def safety_center():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Safety center", safety_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#warnings", "Warnings"), ("#feeds", "Market data"),
+                              ("#events", "Risk history")],
+                        alive=data["worker_healthy"], current="safety")
+        finally:
+            conn.close()
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def clear_settings():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Trading settings", settings_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/safety", "Safety"), ("/approvals", "Approvals"),
+                              ("/advanced#limits", "Technical limits")],
+                        alive=data["worker_healthy"], current="settings")
+        finally:
+            conn.close()
+
+    @app.get("/approvals", response_class=HTMLResponse)
+    def owner_approvals():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Owner approvals", approval_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/safety", "Safety"), ("#pending", "Pending decisions"),
+                              ("#policy", "Approval process")],
+                        alive=data["worker_healthy"], current="settings")
         finally:
             conn.close()
 
@@ -504,10 +719,27 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             decide_graduation(conn, bot_id, action == "approve", "dashboard")
         finally:
             conn.close()
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/approvals", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     def overview():
+        """Simple default view: four clear KPIs rather than technical reports."""
+        conn = db()
+        try:
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
+            body = home_dashboard(conn, cfg, now)
+            return page("Home dashboard", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        alive=alive, current="home")
+        finally:
+            conn.close()
+
+    @app.get("/advanced", response_class=HTMLResponse)
+    def advanced():
+        """Preserve all existing technical reports, decisions and approvals."""
         conn = db()
         try:
             st = RiskState(conn)
@@ -515,21 +747,31 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             hb = st.get(HEARTBEAT)
             alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
             body = _overview(conn, cfg, bool(env.get("DASHBOARD_TOKEN")))
-            return page("Trading bots", body, summary(conn, now)["mode"],
-                        f"last trading loop {_ago(hb, now)}", alive=alive)
+            return page("Technical dashboard", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}", tabs=OVERVIEW_TABS,
+                        alive=alive, current="advanced")
         finally:
             conn.close()
 
     @app.get("/graveyard", response_class=HTMLResponse)
-    def graveyard():
+    def graveyard(scope: str = "all", category: str = "all", offset: int = 0):
         conn = db()
         try:
             st = RiskState(conn)
             now = now_ms()
             hb = st.get(HEARTBEAT)
-            return page("Graveyard", _graveyard(conn), summary(conn, now)["mode"],
-                        f"last trading loop {_ago(hb, now)}", tabs=[("/", "Overview")],
-                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000)
+            data = learning_report(conn, cfg)
+            try:
+                listing = learning_failures(conn, scope, category, offset)
+            except ValueError:
+                raise HTTPException(400, "Unknown failure history filter") from None
+            return page("Why strategies failed", failure_page(data, listing),
+                        summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/learning", "Learning & Research"),
+                              ("#failure-history", "Failure records")],
+                        alive=bool(hb) and 0 <= now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="learning")
         finally:
             conn.close()
 

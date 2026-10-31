@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from html import escape
 from urllib.parse import quote
 
@@ -56,12 +57,18 @@ def equity_chart(points: list[dict]) -> str:
         series.append(f'<polyline points="{coords}" fill="none" '
                       f'stroke="var({clr})" stroke-width="3" '
                       'stroke-linecap="round" stroke-linejoin="round"/>')
+    chart_data = json.dumps([
+        {"ts": p.get("observed_ms"), "pnl": p["net_pnl"],
+         "hold": p["benchmark_net_pnl"]}
+        for p in points], separators=(",", ":"))
     return (
         '<div class="legend"><span><i style="background:var(--series-1)"></i>'
         'Research league: net P&amp;L</span><span><i style="background:var(--series-3)"></i>'
         'Buy-and-hold: modeled net P&amp;L</span></div>'
-        '<div style="width:100%;overflow-x:auto">'
-        f'<svg role="img" aria-label="Observed simulated profits compared to buy and hold" '
+        '<div class="equity-interactive" style="width:100%;overflow-x:auto">'
+        f'<svg class="forward-equity" tabindex="0" data-points="{escape(chart_data, quote=True)}" '
+        f'role="img" aria-label="Observed simulated profits compared to buy and hold; '
+        f'use left and right arrow keys to inspect observed values" '
         f'viewBox="0 0 {W} {H}" style="width:100%;min-width:310px;max-height:310px">'
         + "".join(grid)
         + f'<line x1="{L}" y1="{y(0):.1f}" x2="{W-R}" y2="{y(0):.1f}" '
@@ -71,7 +78,8 @@ def equity_chart(points: list[dict]) -> str:
           f'{escape(_utc(points[0]["observed_ms"])[:17])}</text>'
         + f'<text x="{W-R}" y="{H-10}" font-size="12" text-anchor="end" '
           f'fill="var(--ink-2)">{escape(_utc(points[-1]["observed_ms"])[:17])}</text>'
-        + '</svg></div>'
+        + '</svg><div class="equity-chart-tip" role="status" aria-live="polite">'
+          'Hover, tap or use the arrow keys to inspect observed results.</div></div>'
         '<p class="help">Only observed hourly marks are plotted. Missing hours are not '
         'filled in; lines simply connect available measurements. All returns are '
         'simulated, not real Kraken orders.</p>')

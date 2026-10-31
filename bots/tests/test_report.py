@@ -82,9 +82,10 @@ def dash(tmp_path, cfg):
 
 def test_dashboard_pages(dash):
     client, _ = dash
-    r = client.get("/")
+    r = client.get("/advanced")
     assert r.status_code == 200
     assert "PAPER" in r.text
+    assert "Know what your bots are doing" in client.get("/").text
     assert "never risk-free" in r.text and "real money can be lost" in r.text
     assert "Ready to graduate" in r.text
     assert client.get("/graveyard").status_code == 200
@@ -107,7 +108,7 @@ def test_dashboard_without_token_disables_approvals(tmp_path, cfg):
     conn.close()
     client = TestClient(create_app(db, cfg, env={}))
     assert client.post("/bots/b1/approve", data={"token": ""}).status_code == 403
-    assert "Approve from Telegram" in client.get("/").text
+    assert "Approve from Telegram" in client.get("/advanced").text
 
 
 def test_daily_report_text(conn):
@@ -124,7 +125,7 @@ def test_dashboard_shows_mood_and_briefing(dash):
     conn.execute("INSERT INTO analyst_digests (ts, items, used_ai, text) VALUES "
                  "(1760000000000, 5, 1, 'Mood: <b>fearful</b>')")
     conn.commit()
-    page = client.get("/").text
+    page = client.get("/advanced").text
     assert "Market mood and AI analyst" in page and "<b>23</b>/100" in page
     assert "Mood: &lt;b&gt;fearful&lt;/b&gt;" in page  # untrusted text is escaped
     assert "never read it" in page
@@ -140,7 +141,7 @@ def test_dashboard_draws_equity_history(dash):
     conn.executemany("INSERT INTO equity_history (account_id, day, ts, equity) VALUES (?,?,?,?)",
                      [(acc, d, d * 86_400_000, 20 + d * 0.1) for d in range(5)])
     conn.commit()
-    page = client.get("/").text
+    page = client.get("/advanced").text
     assert "Equity, last" in page and "<polyline" in page
 
 
@@ -179,7 +180,7 @@ def test_forward_paper_evidence_endpoint_and_status(dash):
     assert client.get("/api/paper/missing/history").status_code == 404
     status = client.get("/api/status").json()
     assert any(x["bot_id"] == "p5" for x in status["paper_forward"])
-    page = client.get("/").text
+    page = client.get("/advanced").text
     assert "Forward paper verification" in page
     assert "Distinct market days" in page
 
@@ -195,7 +196,7 @@ def test_pilot_readiness_is_read_only_and_unfunded(dash):
     assert pilot["configuration_blockers"]
     assert pilot["profitability_proven"] is False
     assert client.get("/api/status").json()["pilot"]["enabled"] is False
-    page = client.get("/").text
+    page = client.get("/advanced").text
     assert "Controlled live pilot" in page and "OFF — PAPER ONLY" in page
 
 
@@ -209,6 +210,6 @@ def test_scaling_readiness_reports_zero_auto_funding(dash):
     assert data["safe_to_auto_scale"] is False
     assert data["approved_scale_cap_usd"] == 0
     assert client.get("/api/status").json()["scaling"]["status"] == "blocked"
-    html = client.get("/").text
+    html = client.get("/advanced").text
     assert "Live performance &amp; capital scaling" in html
     assert "OFF — NO SCALING" in html
