@@ -92,6 +92,20 @@ def snapshot(conn: sqlite3.Connection, cfg: dict, now: int,
     pilot = pilot_status(conn, cfg, now)
     scaling = scale_review(conn, cfg, now)
     risks = cfg["risk"]
+    risk_problems = risk_config_problems(cfg)
+    if risk_problems:
+        notices.append({
+            "key": "risk_configuration",
+            "title": "Risk configuration needs review",
+            "explanation": "The existing risk guard detected invalid configuration: " +
+                           "; ".join(risk_problems[:6]) + ". No settings can be changed here."})
+    if mode != "LIVE" and live_accounts:
+        notices.append({
+            "key": "live_positions",
+            "title": "Live account records still exist in paper mode",
+            "explanation": "The engine currently reports paper mode, but active live accounts "
+                           "remain recorded. Review exchange stops, exposure and reconciliation "
+                           "using the protected operational process."})
     queue = []
     for bot in conn.execute(
         "SELECT bot_id,genome_json,updated_at,status_reason "
@@ -119,7 +133,6 @@ def snapshot(conn: sqlite3.Connection, cfg: dict, now: int,
         })
     events = [dict(r) for r in conn.execute(
         "SELECT ts,kind,detail FROM risk_events ORDER BY id DESC LIMIT 30")]
-    risk_problems = risk_config_problems(cfg)
     if mode == "LIVE":
         headline = "Real-money mode is active"
         level = "danger"
