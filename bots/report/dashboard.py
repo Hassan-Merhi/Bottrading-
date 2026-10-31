@@ -30,6 +30,8 @@ from bots.paper.forward import evidence, net_hold_return, history
 from bots.live.pilot import pilot_status
 from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
+from bots.paper.league import snapshot as lab_snapshot
+from bots.research.agent import snapshot as research_snapshot
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
@@ -322,7 +324,8 @@ def progress_chart(gens: list[dict]) -> str:
             f'stroke-dasharray="3 3" style="display:none"/></svg><div class="tip"></div></div>')
 
 
-OVERVIEW_TABS = [("#status", "Status"), ("#pipeline", "Pipeline"), ("#results", "Results"),
+OVERVIEW_TABS = [("#status", "Status"), ("#league", "Paper league"), ("#research", "Research"),
+                 ("#pipeline", "Pipeline"), ("#results", "Results"),
                  ("#bots", "Bots"), ("#evolution", "Evolution"), ("#briefing", "Briefing"),
                  ("#events", "Risk log"), ("#limits", "Limits")]
 
@@ -371,7 +374,25 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             s["market_data"] = market_health(conn, cfg)
             s["pilot"] = pilot_status(conn, cfg, now_ms())
             s["scaling"] = scale_review(conn, cfg, now_ms())
+            s["research_league"] = lab_snapshot(conn, cfg)
+            s["research"] = research_snapshot(conn, cfg)
             return JSONResponse(json.loads(json.dumps(s, default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/api/research/league")
+    def research_league_status():
+        conn = db()
+        try:
+            return JSONResponse(lab_snapshot(conn, cfg))
+        finally:
+            conn.close()
+
+    @app.get("/api/research/sources")
+    def research_sources_status():
+        conn = db()
+        try:
+            return JSONResponse(research_snapshot(conn, cfg))
         finally:
             conn.close()
 
@@ -743,6 +764,50 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
         '<span class="lbl">locked profit, never traded again</span></div>'
         '</div></section>')
 
+    # Research data stays in separate ledgers, never in promoted paper or live.
+    league = lab_snapshot(conn, cfg)
+    examples = league.get("bots", [])
+    lab_rows = "".join(
+        '<div class="kv"><span>' + escape(b["name"]) + ' · ' + escape(b["pair"]) +
+        ' · ' + str(b["trades"]) + ' settled trades</span><span class="' +
+        ('ok' if b["pnl"] >= 0 else 'no') + '">USD ' +
+        f'{b["equity"]:.2f} ({b["pnl"]:+.2f})</span></div>'
+        for b in examples)
+    parts.append(
+        '<section id="league"><h2>Experimental paper league</h2>'
+        '<p class="help">Real Kraken closed candles, fake 20 USD per experiment, '
+        'conservative taker fees + spread + slippage. No backfilled trades and NO '
+        'path to real-money approval. This league is deliberately separate '
+        'from strictly qualified paper trading.</p>'
+        '<div class="grid"><div class="tile"><span class="lbl">Experimental net P&amp;L</span>'
+        f'<b class="{"ok" if league.get("pnl", 0) >= 0 else "no"}">'
+        f'USD {league.get("pnl", 0):+.2f}</b></div>'
+        '<div class="tile"><span class="lbl">Experimental capital (fake)</span>'
+        f'<b>USD {league.get("capital", 0):.2f}</b></div>'
+        '<div class="tile"><span class="lbl">Closed trades</span>'
+        f'<b>{league.get("completed_trades", 0)}</b></div>'
+        '<div class="tile"><span class="lbl">Mode</span><b>PAPER ONLY</b></div></div>'
+        '<div class="status" style="margin-top:12px"><h3>Live forward experiments</h3>'
+        + (lab_rows or '<p class="help">Initializing after a fresh closed Kraken candle.</p>')
+        + '</div></section>')
+    research = research_snapshot(conn, cfg)
+    news = research.get("sources", [])
+    source_rows = "".join(
+        '<div class="kv"><a href="' + escape(item["url"], quote=True) +
+        '" target="_blank" rel="noopener noreferrer nofollow">' +
+        escape(item["title"]) + '</a><span>' + escape(item["source"]) + '</span></div>'
+        for item in news[:8])
+    note_rows = "".join('<li>' + escape(note) + '</li>' for note in research.get("notes", []))
+    parts.append(
+        '<section id="research"><h2>Autonomous market research</h2>'
+        '<p class="help">Daily Google News research, plus optional Google Programmable Search '
+        'when credentials are configured. Web content is untrusted: research can describe '
+        'market ideas but never modify trading code, risk limits, approvals or orders.</p>'
+        '<div class="status"><h3>Recent research &amp; feedback</h3>'
+        + ('<ul>' + note_rows + '</ul>' if note_rows else
+           '<p class="help">Research history will appear after the first daily collection.</p>')
+        + source_rows + '</div></section>')
+
     # -- 4. bots ----------------------------------------------------------------
     waiting = conn.execute("SELECT * FROM deployed_bots WHERE status='ready_to_graduate'").fetchall()
     bots_parts = []
@@ -885,9 +950,9 @@ def _overview(conn, cfg: dict, approvals_enabled: bool) -> str:
         '<div><b>ATR stop</b>Some bots place their stop a multiple of the recent average candle '
         'range (ATR) below entry, so it widens in wild markets and tightens in calm ones. It is '
         'always kept within the fixed stop\'s 0.5–5% range.</div>'
-        '<div><b>Entries and fees</b>A bot buys with a limit order resting at the bid, paying '
-        'the lower maker fee; if the market does not come to it the order is withdrawn. Every '
-        'exit is a market order.</div>'
+        '<div><b>Entries and fees</b>Default entry and exit execution uses market orders, '
+        'charged conservative taker fees and spread/slippage. Maker-limit experiments may '
+        'go unfilled; their simulated fills are never assumed from candle highs/lows.</div>'
         '<div><b>Trailing stop, time exit</b>Some bots also raise their stop as price climbs '
         '(locking in gains) or close a trade after a set number of candles. Evolution decides '
         'whether either helps.</div>'
