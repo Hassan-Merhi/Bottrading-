@@ -41,6 +41,10 @@ from bots.paper.league import snapshot as lab_snapshot
 from bots.paper.forward_history import forward_history
 from bots.report.forward_page import history_page, overview_panel
 from bots.research.agent import snapshot as research_snapshot
+from bots.report.learning_data import (report as learning_report,
+                                      source_list as learning_sources,
+                                      failure_list as learning_failures)
+from bots.report.learning_view import learning_page, source_page, failure_page
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
@@ -552,6 +556,68 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         finally:
             conn.close()
 
+    @app.get("/api/learning/summary")
+    def learning_summary():
+        """Read-only historical learning status; not forward profitability."""
+        conn = db()
+        try:
+            return JSONResponse(learning_report(conn, cfg))
+        finally:
+            conn.close()
+
+    @app.get("/api/learning/sources")
+    def saved_research_sources(search: str = "", source: str = "",
+                               offset: int = 0, limit: int = 24):
+        conn = db()
+        try:
+            return JSONResponse(learning_sources(conn, search, source, offset, limit))
+        finally:
+            conn.close()
+
+    @app.get("/api/learning/failures")
+    def failed_strategy_history(scope: str = "all", category: str = "all",
+                                offset: int = 0, limit: int = 40):
+        conn = db()
+        try:
+            try:
+                return JSONResponse(learning_failures(conn, scope, category, offset, limit))
+            except ValueError:
+                raise HTTPException(400, "Unknown strategy failure filter") from None
+        finally:
+            conn.close()
+
+    @app.get("/learning", response_class=HTMLResponse)
+    def learning_explained():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = learning_report(conn, cfg)
+            sources = learning_sources(conn, limit=8)
+            return page("Learning and Research", learning_page(data, sources),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#learning-overview", "Pipeline"), ("#evolution", "Evolution"),
+                              ("#failures", "Failures"), ("#research", "News & sources")],
+                        alive=bool(hb) and 0 <= now - int(hb) < 3*60*60*1000,
+                        current="learning")
+        finally:
+            conn.close()
+
+    @app.get("/research/sources", response_class=HTMLResponse)
+    def source_library(search: str = "", source: str = "", offset: int = 0):
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            rows = learning_sources(conn, search, source, offset)
+            return page("Saved research sources", source_page(rows),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/learning#research", "Learning & Research")],
+                        alive=bool(hb) and 0 <= now-int(hb) < 3*60*60*1000,
+                        current="learning")
+        finally:
+            conn.close()
+
     @app.get("/api/pilot/readiness")
     def pilot_readiness():
         conn = db()
@@ -631,16 +697,24 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             conn.close()
 
     @app.get("/graveyard", response_class=HTMLResponse)
-    def graveyard():
+    def graveyard(scope: str = "all", category: str = "all", offset: int = 0):
         conn = db()
         try:
             st = RiskState(conn)
             now = now_ms()
             hb = st.get(HEARTBEAT)
-            return page("Graveyard", _graveyard(conn), summary(conn, now)["mode"],
-                        f"last trading loop {_ago(hb, now)}", tabs=[("/advanced#evolution", "Learning & Research")],
-                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
-                        current="graveyard")
+            data = learning_report(conn, cfg)
+            try:
+                listing = learning_failures(conn, scope, category, offset)
+            except ValueError:
+                raise HTTPException(400, "Unknown failure history filter") from None
+            return page("Why strategies failed", failure_page(data, listing),
+                        summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/learning", "Learning & Research"),
+                              ("#failure-history", "Failure records")],
+                        alive=bool(hb) and 0 <= now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="learning")
         finally:
             conn.close()
 
