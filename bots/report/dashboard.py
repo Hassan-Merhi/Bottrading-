@@ -45,6 +45,8 @@ from bots.report.learning_data import (report as learning_report,
                                       source_list as learning_sources,
                                       failure_list as learning_failures)
 from bots.report.learning_view import learning_page, source_page, failure_page
+from bots.report.safety_data import snapshot as safety_snapshot
+from bots.report.safety_view import safety_page, settings_page, approval_page
 from bots.risk.guard import HARD_CAPITAL_CEILING_USD
 from bots.risk.ledger import DAY_MS
 from bots.risk.state import (DAILY_HALT_UNTIL, ENTRY_HALT, HEARTBEAT, KILL_SWITCH, CRASH_LOCK,
@@ -618,6 +620,61 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         finally:
             conn.close()
 
+    @app.get("/api/safety/overview")
+    def safety_overview():
+        """Read-only evidence: never exposes tokens or operates the guard."""
+        conn = db()
+        try:
+            return JSONResponse(safety_snapshot(conn, cfg, now_ms(),
+                                                bool(env.get("DASHBOARD_TOKEN"))))
+        finally:
+            conn.close()
+
+    @app.get("/safety", response_class=HTMLResponse)
+    def safety_center():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Safety center", safety_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#warnings", "Warnings"), ("#feeds", "Market data"),
+                              ("#events", "Risk history")],
+                        alive=data["worker_healthy"], current="safety")
+        finally:
+            conn.close()
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def clear_settings():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Trading settings", settings_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/safety", "Safety"), ("/approvals", "Approvals"),
+                              ("/advanced#limits", "Technical limits")],
+                        alive=data["worker_healthy"], current="settings")
+        finally:
+            conn.close()
+
+    @app.get("/approvals", response_class=HTMLResponse)
+    def owner_approvals():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Owner approvals", approval_page(data),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/safety", "Safety"), ("#pending", "Pending decisions"),
+                              ("#policy", "Approval process")],
+                        alive=data["worker_healthy"], current="settings")
+        finally:
+            conn.close()
+
     @app.get("/api/pilot/readiness")
     def pilot_readiness():
         conn = db()
@@ -662,7 +719,7 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             decide_graduation(conn, bot_id, action == "approve", "dashboard")
         finally:
             conn.close()
-        return RedirectResponse("/advanced#bots", status_code=303)
+        return RedirectResponse("/approvals", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     def overview():
