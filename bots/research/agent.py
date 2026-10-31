@@ -96,8 +96,8 @@ def _feedback(conn: sqlite3.Connection) -> tuple[str | None, list[str]]:
     if row is None:
         return None, ["No completed evolution run; collect real market observations first."]
     run = row[0]
-    deaths = dict(conn.execute("SELECT cause, COUNT(*) FROM graveyard "
-                               "WHERE run_id=? GROUP BY cause", (run,)).fetchall())
+    deaths = dict(conn.execute("SELECT diagnosis, COUNT(*) FROM graveyard "
+                               "WHERE run_id=? GROUP BY diagnosis", (run,)).fetchall())
     notes = []
     if sum(v for k, v in deaths.items() if "fees" in k) > 0:
         notes.append("Fee-heavy strategies are failing. Keep full spread/slippage/taker fees "
@@ -118,6 +118,22 @@ def _feedback(conn: sqlite3.Connection) -> tuple[str | None, list[str]]:
     return run, notes or ["No dominant failure pattern; keep gathering out-of-sample evidence."]
 
 
+def _queries(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Adapt the next day's research topics to measured, historical failures.
+    Search findings themselves NEVER modify execution or fitness parameters.
+    """
+    run, notes = _feedback(conn)
+    q = list(QUERIES)
+    feedback = " ".join(notes).lower()
+    if "fee" in feedback:
+        q.append("post only maker limit order fill probability Kraken market microstructure fees")
+    if "sparse" in feedback or "few trades" in feedback:
+        q.append("crypto systematic trend pullback signal frequency out of sample walk forward")
+    if "lose" in feedback or "negative" in feedback:
+        q.append("cryptocurrency regime robustness momentum drawdown risk backtesting")
+    return tuple(dict.fromkeys(q))[:6]
+
+
 def run_research(conn: sqlite3.Connection, cfg: dict, env: dict | None = None,
                  now_ms: int | None = None) -> dict:
     rcfg = cfg.get("research") or {}
@@ -131,7 +147,7 @@ def run_research(conn: sqlite3.Connection, cfg: dict, env: dict | None = None,
     if last is not None and now_ms - last < 20 * 3_600_000:
         return snapshot(conn, cfg)
     added, errors = 0, []
-    for query in QUERIES:
+    for query in _queries(conn):
         for provider in (_google_news,):
             try:
                 items = provider(query)
