@@ -229,7 +229,7 @@ def home_dashboard(conn: sqlite3.Connection, cfg: dict, now: int) -> str:
         '<a class="text-link" href="/research/forward">See each bot’s history →</a></div>'
         '<p class="help">These experiments do not qualify automatically for real-money '
         'trading. Profit can be positive or negative.</p>' + bot_cards
-        + (f'<p class="inline-tip">Separately, {qualified_count} strictly qualified '
+        + (f'<p class="inline-tip">Separately, {qualified_count} standard-pipeline '
            f'paper account(s), {waiting} approval request(s) and {live_count} live bot(s) '
            'are tracked in the advanced pipeline.</p>' if (qualified_count or waiting or live_count)
            else '<p class="inline-tip">There are no approved or live bots. '
