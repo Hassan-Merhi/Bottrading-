@@ -108,7 +108,7 @@ def performance_page(data: dict) -> str:
         '<h1>Is your fake-money trading profitable?</h1>'
         '<p>View recorded simulated outcomes, compare coins, understand fees '
         'and find every buy or sell. No live-money results are mixed in.</p></div>'
-        '<div class="status-pill good">Simulation only · no real-money trading</div>')
+        '<div class="status-pill good">These results are simulations · real accounts are shown separately</div>')
     tabs = ('<nav class="period-tabs" aria-label="Time period">' +
             "".join('<a href="' + escape(_filter_url(name, key, data["side"],
                                                      data["result"], data["search"]), quote=True) +
@@ -168,7 +168,7 @@ def performance_page(data: dict) -> str:
     trades = ('<section id="trades"><div class="section-head"><h2>Every recorded trade</h2>'
               '<span class="status-pill">' + str(len(data["fills"])) +
               ' matches</span></div>'
-              '<p class="help">Each row is an observed simulated fill, not an actual '
+              '<p class="help">The totals above cover all actions in your chosen period; the action, outcome and search filters apply only to the table below. Each row is an observed simulated fill, not an actual '
               'exchange order. Profit is recorded only when a position is sold.</p>'
               + search + _trade_rows(data)
               + '<div class="export-links"><a href="' +
