@@ -9,7 +9,7 @@ from html import escape
 
 NAV = (
     ("home", "Home", "/", "01"),
-    ("bots", "My Bots", "/#my-bots", "02"),
+    ("bots", "My Bots", "/bots", "02"),
     ("performance", "Performance", "/research/forward", "03"),
     ("learning", "Learning & Research", "/advanced#evolution", "04"),
     ("safety", "Safety", "/advanced#status", "05"),
@@ -226,6 +226,78 @@ button:disabled{opacity:.55;cursor:not-allowed}
  html{scroll-behavior:auto}
  *,*::before,*::after{transition:none!important}
 }
+
+/* Phase 2: crisp data hierarchy and usable filter controls on every screen. */
+.perf-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:17px 0}
+.perf-tile{display:flex;flex-direction:column;gap:9px;background:var(--panel);
+ border:1px solid var(--line);border-radius:16px;padding:19px;box-shadow:var(--shadow)}
+.perf-tile .perf-title{font-size:12px;font-weight:730;color:var(--ink-2)}
+.perf-tile strong{font-size:clamp(22px,2.1vw,29px);line-height:1.15;letter-spacing:-.045em;
+ font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.perf-tile small{font-size:12px;color:var(--ink-3);line-height:1.5}
+.perf-filters{display:flex;gap:13px;align-items:end;flex-wrap:wrap;margin:13px 0 18px}
+.perf-filters label{display:grid;gap:6px;color:var(--ink-2);font-size:12px;font-weight:700;min-width:145px}
+.perf-filters select,.perf-filters input{height:41px;width:100%;max-width:265px;
+ padding:9px 12px;border:1px solid var(--line);background:var(--panel);
+ color:var(--ink);border-radius:10px;font:inherit;font-size:13px}
+.perf-filters button{min-height:41px;background:var(--accent);color:#fff;border-color:transparent}
+.perf-filters .text-link{padding:11px 4px}
+.period-tabs{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin:18px 0 15px}
+.period-tabs a{padding:9px 13px;border-radius:10px;border:1px solid var(--line);
+ text-decoration:none;background:var(--panel);color:var(--ink-2);font-size:12px;font-weight:720}
+.period-tabs a:hover,.period-tabs a[aria-current="page"]{background:var(--paper-soft);color:var(--accent);
+ border-color:var(--accent)}
+.perf-summary{margin-top:10px!important;padding:12px 20px!important}
+.fee-card{padding:14px 0}
+.fee-bar{display:flex;width:100%;height:16px;border-radius:999px;overflow:hidden;background:var(--line)}
+.fee-bar span:first-child{background:var(--series-1)}
+.fee-bar span:last-child{background:var(--series-2)}
+.fee-legend{display:flex;gap:22px;flex-wrap:wrap;margin-top:16px}
+.fee-legend span{font-size:13px;color:var(--ink-2)}
+.fee-legend b{margin-left:6px;color:var(--ink)}
+.trade-table-wrap{max-width:100%;overflow-x:auto}
+.perf-table{min-width:780px}
+.perf-table td{font-size:12px;padding:12px 8px;vertical-align:middle}
+.perf-table th{font-size:12px}
+.trade-detail{font-size:12px;min-width:100px;color:var(--ink-2)}
+.trade-detail summary,.rule-details summary{color:var(--accent);cursor:pointer;font-weight:690}
+.trade-detail p{margin:6px 0}
+.rule-details{padding:13px 15px;background:var(--panel-2);border-radius:11px}
+.rule-details p{margin-bottom:0;overflow-wrap:anywhere}
+.export-links{display:flex;gap:17px;flex-wrap:wrap;margin:18px 0 0;font-size:12px;font-weight:700}
+.export-links a{text-decoration:none}
+.export-links a:hover{text-decoration:underline}
+.bot-directory{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:16px 0}
+.bot-directory-card{border:1px solid var(--line);background:var(--panel-2);
+ border-radius:15px;padding:19px;display:flex;flex-direction:column;gap:7px}
+.bot-directory-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.bot-directory-top h3{margin:0;font-size:16px;letter-spacing:-.03em}
+.bot-directory-top span{color:var(--ink-3);font-size:12px}
+.bot-directory-top .status-pill{font-size:10px;white-space:normal;text-align:right}
+.bot-directory-value{font-size:28px;font-weight:800;letter-spacing:-.04em;margin-top:7px}
+.bot-directory-card p{font-size:12px;color:var(--ink-2);min-height:37px}
+.bot-directory-card .button-link{margin-top:auto;align-self:flex-start;display:inline-flex;
+ padding:9px 13px;background:var(--paper-soft);color:var(--accent);font-size:12px;
+ font-weight:730;text-decoration:none}
+.experiment .bot-detail-link{margin-top:12px;display:inline-flex;font-size:12px;
+ text-decoration:none;font-weight:750;color:var(--accent)}
+@media(max-width:1150px){
+ .perf-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .bot-directory{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:660px){
+ .perf-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+ .perf-tile{padding:14px 12px}
+ .perf-tile strong{font-size:22px}
+ .bot-directory{grid-template-columns:1fr}
+ .perf-filters label{flex:1 1 125px;min-width:0}
+ .perf-filters input,.perf-filters select{max-width:none}
+ .trade-table-wrap{overflow:visible}
+ .perf-table{min-width:0}
+ .fee-legend{gap:9px}
+ .fee-legend span{font-size:11px}
+}
+
 """
 NEXT_JS = """
 (function(){
