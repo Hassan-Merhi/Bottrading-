@@ -501,11 +501,11 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             decide_graduation(conn, bot_id, action == "approve", "dashboard")
         finally:
             conn.close()
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse("/advanced#bots", status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     def overview():
-        """Simple default view: five clear numbers rather than technical reports."""
+        """Simple default view: four clear KPIs rather than technical reports."""
         conn = db()
         try:
             st = RiskState(conn)
