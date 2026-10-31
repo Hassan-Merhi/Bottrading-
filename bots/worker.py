@@ -212,7 +212,8 @@ class Worker:
             from bots.paper.league import tick as lab_tick
             if feed["healthy"] and not feed["last_errors"] and report is not None and report.healthy:
                 lab_tick(self.conn, self.cfg, now_ms(), allow_entries=not bool(
-                    self.state.get("owner_pause") or self.state.get("entry_halt")))
+                    self.state.get("owner_pause") or self.state.get("entry_halt")),
+                    price_source=self.trader.md)
         except Exception as e:  # noqa: BLE001
             print(f"Research paper league tick skipped: {e}", flush=True)
         # Re-assert the independent whitelist gate even if Trader saw only healthy
