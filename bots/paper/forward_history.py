@@ -47,8 +47,8 @@ def forward_history(conn: sqlite3.Connection, cfg: dict, name: str = "all",
     'all' aggregates only timestamps witnessed for EVERY active research bot.
     It does not forward-fill one bot's missing observations to fake continuity.
     """
-    limit = max(1, min(int(limit), 1440))
-    fills_limit = max(1, min(int(fills_limit), 500))
+    limit = max(1, min(int(limit), 25000))
+    fills_limit = max(1, min(int(fills_limit), 25000))
     empty = {"enabled": bool((cfg.get("research_league") or {}).get("enabled")),
              "simulation": True, "real_money": False, "mode": "PAPER",
              "name": name, "bots": [], "observations": [], "fills": [],
