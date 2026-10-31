@@ -127,10 +127,39 @@ all requested phases are completed, reviewed and safety-checked.
 - No change to RiskGuard, exchange reconciliation, historical qualification,
   funded pilot gates, hard capital ceiling, trade execution, DB schema, or worker.
 
-## Phase 5 — pending
+## Phase 5 — verified in isolated staging; production release authorized
 
-- End-to-end checks (account separation, desktop/mobile/browser, timing,
-  no-fabricated-results, approvals), review and deliberate production rollout.
+- A separate **Render free-plan staging service**, `trading-bots-phase5-qa`,
+  ran the repository's **entire pytest suite** from this feature branch as
+  part of a real build. Python compilation and all 269 tests succeeded,
+  zero failures, on code commit `d9597267a6abba42593bb35350d04a7858929d04`.
+- The first independent test attempt found 1 failure among 268 tests. It was
+  an overconstrained non-emptiness assertion for the strict `trend_pullback`
+  entry strategy on a random fixture. The test was corrected to verify signal
+  causality for every strategy and a **separate deterministic positive-control**
+  case proves `trend_pullback` can produce genuine entries. Strategy code,
+  order sizing and risk controls were NOT changed.
+- Staging build and web process run on an independent empty database, with
+  `MODE=PAPER`, no exchange API credentials and **no trading worker**.
+  Production capital/database and existing user account are unaffected.
+- Staging returned HTTP success and valid content for `/healthz`, `/`,
+  `/api/status`, `/bots`, `/research/forward`, `/learning`, `/safety`,
+  `/settings`, `/approvals` and `/graveyard`.
+- Read-only browser QA clicked the six primary destinations plus approvals
+  and graveyard; confirmed readable content, consistent fake-money warnings,
+  Simple/Advanced controls, working light/dark switch and no broken pages.
+  The isolated empty staging DB correctly showed **missing market data and
+  uninitialized accounts**, not invented profits, trading activity or health.
+- Tests cover incorrect authorization tokens, owner-approval flow, risk lock
+  preservation, safe external source URLs, paper/live separation, no fabricated
+  equity, no future signals, transaction fee reporting and CSV filters.
+- Existing GitHub Actions jobs still cannot start (account billing lock,
+  0 steps executed). The independent Render test run is the executable
+  verification; GitHub's red status is **not** a passing CI indicator.
+- Merge PR #23 into `main` using the verified head SHA, allow the existing
+  `main` Render service to auto-deploy, then check the actual production
+  endpoints and deployment state before calling the release done.
+
 
 ## Important truth about results
 
