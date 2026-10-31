@@ -174,9 +174,13 @@ def source_list(conn: sqlite3.Connection, query: str = "", source: str = "",
     items = []
     for item in rows:
         item = dict(item)
-        u = urlsplit(str(item["url"]))
-        # Never surface javascript:/data:/http: or embedded-credential URLs.
-        if u.scheme != "https" or not u.hostname or u.username or u.password:
+        # Never surface javascript:/data:/http:, malformed hostnames or
+        # embedded-credential URLs. Bad external data must not crash the UI.
+        try:
+            u = urlsplit(str(item["url"]))
+            if u.scheme != "https" or not u.hostname or u.username or u.password:
+                item["url"] = ""
+        except ValueError:
             item["url"] = ""
         items.append(item)
     return {"items": items, "total": total, "offset": offset, "limit": limit,
