@@ -57,10 +57,37 @@ all requested phases are completed, reviewed and safety-checked.
 - Existing legacy endpoints and protected approval POST actions unchanged.
 - No strategy, order, risk, validation or live-trading code altered.
 
-## Phase 3 — pending
+## Phase 3 — implemented on the SAME branch
 
-- Learning and research summaries, validation funnels, failure charts,
-  readable strategy details and sources.
+- New dedicated `/learning` page with distinct counts for finished evolution
+  generations, uniquely evaluated candidate genomes, historical holdout passes,
+  failure events and saved public research sources.
+- Clear step-by-step journey from historical optimization to separate paper
+  verification; stages use **different units**, not a mathematically misleading
+  conversion funnel. All historical testing explicitly labelled **not forward
+  profitability**.
+- Actual stored best/middle/worst training fitness values charted by generation;
+  never interpreted as dollar profit or future trading success.
+- Top historical candidates have plain-English explanations, training return,
+  hold return, drawdown and trade counts, with advanced fitness behind an expander.
+- Failure causes classified into costs/fees, too few signals, negative returns,
+  risk, validation, and other. Horizontal bar charts use counts of recorded
+  **failure events**, not unique bot IDs.
+- Redesigned `/graveyard` with original diagnosis text and strategy details,
+  filters for latest/all completed runs, category filters and safe pagination.
+- Research sources stored during daily Google News collection are searchable at
+  `/research/sources`, with optional publisher filters, collection timestamp,
+  original source links, and plainly stated limits on news accuracy. Unsafe
+  external URL schemes are not rendered as clickable links.
+- Research feedback notes are shown as reading/diagnostic suggestions; public
+  content cannot place trades, auto-change code, or bypass approval rules.
+- New read-only JSON endpoints: `/api/learning/summary`,
+  `/api/learning/sources`, and `/api/learning/failures`.
+- Regression cases added for historical counts, test-pass scope, empty states,
+  categorization, original source escaping, filtered news, rejection pagination,
+  no account mutations and preserved protected approval API.
+- No changes to trade execution, evolution selection logic, research collection,
+  risk caps, storage schema, live mode, or approval requirements.
 
 ## Phase 4 — pending
 
