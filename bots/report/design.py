@@ -12,8 +12,8 @@ NAV = (
     ("bots", "My Bots", "/bots", "02"),
     ("performance", "Performance", "/research/forward", "03"),
     ("learning", "Learning & Research", "/learning", "04"),
-    ("safety", "Safety", "/advanced#status", "05"),
-    ("settings", "Settings", "/advanced#limits", "06"),
+    ("safety", "Safety", "/safety", "05"),
+    ("settings", "Settings", "/settings", "06"),
 )
 
 # Added *after* legacy CSS, so the existing report components inherit the
@@ -387,6 +387,93 @@ button:disabled{opacity:.55;cursor:not-allowed}
  .failure-bar-row strong{order:3;text-align:right}
 }
 
+
+/* Phase 4: safety, settings and independently authorized approvals */
+.safety-hero{display:grid;grid-template-columns:minmax(0,1fr) 130px;gap:28px;
+ align-items:center;box-shadow:var(--shadow);margin:12px 0 18px!important;padding:25px 28px!important}
+.safety-hero.good{border-left:5px solid var(--good)}
+.safety-hero.warning{border-left:5px solid var(--warn)}
+.safety-hero.danger{border-left:5px solid var(--bad);background:var(--live-soft)}
+.safety-hero h2{margin:10px 0 7px;font-size:23px}
+.safety-hero p{color:var(--ink-2);margin:0;line-height:1.6}
+.safety-hero-count{border-left:1px solid var(--line);padding-left:18px;text-align:center}
+.safety-hero-count strong{display:block;font-size:35px;font-variant-numeric:tabular-nums}
+.safety-hero-count span{font-size:11px;color:var(--ink-3)}
+.safety-status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:18px}
+.safety-status-card{display:flex;flex-direction:column;gap:9px;border:1px solid var(--line);
+ background:var(--panel);padding:18px;border-radius:15px;box-shadow:var(--shadow)}
+.safety-status-card strong{font-size:23px;letter-spacing:-.04em;line-height:1.25;overflow-wrap:anywhere}
+.safety-status-card small{font-size:12px;color:var(--ink-3);line-height:1.4}
+.safety-status-card .status-pill{font-size:10px}
+.safety-alert{display:flex;align-items:start;gap:13px;padding:15px;margin:9px 0;
+ background:var(--warn-soft);border-radius:13px;border:1px solid var(--line)}
+.safety-alert-symbol{height:30px;min-width:30px;display:grid;place-items:center;border-radius:10px;
+ color:var(--warn);background:var(--panel);font-weight:800}
+.safety-alert b{font-size:13px}
+.safety-alert p{color:var(--ink-2);font-size:12px;line-height:1.5;margin:5px 0 0;overflow-wrap:anywhere}
+.safety-empty{padding:17px;background:var(--panel-2);border:1px dashed var(--line);
+ border-radius:12px;color:var(--ink-2);font-size:13px}
+.safety-detail{padding:12px 15px;background:var(--panel-2);border-radius:12px;margin:12px 0}
+.safety-detail summary{font-size:13px;font-weight:740;color:var(--accent);cursor:pointer}
+.safety-pair-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:13px 0 3px}
+.safety-pair{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+ padding:12px;display:grid;gap:7px}
+.safety-pair>b{font-size:13px}
+.safety-pair span,.safety-pair small{font-size:11px;color:var(--ink-2)}
+.safety-pair .status-pill{justify-self:start}
+.safety-event{padding:11px 15px;border:1px solid var(--line);border-radius:12px;margin:8px 0;
+ background:var(--panel-2)}
+.safety-event summary{display:flex;justify-content:space-between;gap:12px;align-items:center;
+ cursor:pointer;list-style:auto}
+.safety-event summary b{font-size:13px;text-transform:capitalize}
+.safety-event time{font-size:11px;color:var(--ink-3)}
+.safety-event p{font-size:12px;color:var(--ink-2);overflow-wrap:anywhere}
+.settings-banner{border-left:4px solid var(--accent)!important}
+.settings-category .safety-info-list,.settings-banner .status-list{display:grid;gap:1px}
+.safety-info-row{display:flex;gap:15px;align-items:center;justify-content:space-between;
+ border-top:1px solid var(--line);padding:11px 0}
+.safety-info-row:first-child{border-top:0}
+.safety-info-row div{display:grid;gap:4px;min-width:0}
+.safety-info-row b{font-size:13px;font-weight:690}
+.safety-info-row small{font-size:11px;line-height:1.5;color:var(--ink-3)}
+.safety-info-row>strong{font-size:14px;font-weight:780;text-align:right;
+ min-width:110px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.settings-blockers{padding-left:20px;color:var(--ink-2);font-size:13px}
+.settings-blockers li{margin:7px 0;overflow-wrap:anywhere}
+.approval-intro{border-left:5px solid var(--warn)!important}
+.approval-intro p{font-size:13px;line-height:1.65}
+.approval-card-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+.approval-card{border:1px solid var(--line);border-radius:15px;background:var(--panel-2);
+ padding:18px;min-width:0}
+.approval-card .section-head{flex-wrap:wrap}
+.approval-card h3{font-size:17px;letter-spacing:-.03em;margin:0;overflow-wrap:anywhere}
+.approval-card p{font-size:13px;color:var(--ink-2)}
+.approval-metrics{background:var(--panel);border:1px solid var(--line);
+ border-radius:11px;padding:6px 13px;margin:14px 0}
+.approval-form{display:grid;gap:14px;margin-top:15px}
+.approval-form label{display:grid;gap:7px;font-size:12px;color:var(--ink-2);font-weight:710}
+.approval-form input{border-radius:10px;border:1px solid var(--line);background:var(--panel);
+ color:var(--ink);padding:12px;font-size:14px;width:100%;min-width:0}
+.approval-actions{display:flex;flex-wrap:wrap;gap:9px}
+.approval-actions button{flex:1 1 130px;min-height:42px}
+.approval-actions .primary{background:var(--accent);color:#fff}
+.approval-actions .danger{background:var(--live-soft);color:var(--bad);
+ border:1px solid var(--bad)}
+@media(max-width:1160px){.safety-status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:720px){
+ .approval-card-grid,.safety-pair-grid{grid-template-columns:1fr}
+ .safety-hero{grid-template-columns:1fr}
+ .safety-hero-count{border-left:0;border-top:1px solid var(--line);
+ padding:15px 0 0;text-align:left}
+ .safety-hero-count strong{display:inline;margin-right:10px}
+}
+@media(max-width:430px){
+ .safety-status-grid{grid-template-columns:1fr 1fr;gap:8px}
+ .safety-status-card{padding:12px}
+ .safety-status-card strong{font-size:19px}
+ .safety-info-row>strong{min-width:85px;font-size:12px}
+}
+
 """
 NEXT_JS = """
 (function(){
@@ -419,6 +506,20 @@ NEXT_JS = """
   });
 
   // Genuine observed marks only: never interpolate missing hours or create fills.
+  // A double-check before original token-protected approval/decline POSTs.
+  // Client-side confirmation is a usability safeguard, NEVER authorization.
+  document.querySelectorAll('[data-confirm]').forEach(function(button){
+    button.addEventListener('click', function(event){
+      var action=button.getAttribute('data-confirm');
+      var word=action==='approve'?'APPROVE':'DECLINE';
+      if(!window.confirm(word+' this specific standard-paper bot? '+
+         (action==='approve'?
+          'This may permit funded trading later, but only if all separate live safeguards pass.':
+          'The original decision process will retire the selected bot.'))){
+        event.preventDefault();
+      }
+    });
+  });
   document.querySelectorAll('.forward-equity[data-points]').forEach(function(svg){
     var points, at=0;
     try{points=JSON.parse(svg.getAttribute('data-points'));}catch(e){return;}
