@@ -33,6 +33,9 @@ from bots.live.pilot import pilot_status
 from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
 from bots.report.home import home_dashboard
+from bots.report.performance import report as performance_report, export_csv as performance_csv, resolve_bot_slug, validate as validate_performance
+from bots.report.performance_view import performance_page
+from bots.report.bots_view import bots_index, research_detail, standard_account_detail
 from bots.report.design import shell_page
 from bots.paper.league import snapshot as lab_snapshot
 from bots.paper.forward_history import forward_history
@@ -437,23 +440,115 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
                         headers={"Content-Disposition":
                                  f'attachment; filename="paper-forward-{kind}.csv"'})
 
-    @app.get("/research/forward", response_class=HTMLResponse)
-    def forward_evidence_page(name: str = "all"):
+    def verified_performance(conn, name: str, period: str, side: str,
+                             result: str, search: str) -> dict:
+        # A URL must never create an arbitrary lab identity or bypass read-only
+        # accounting views. Only the three fixed research experiments are valid.
+        from bots.paper.league import research_genomes
+        if name != "all" and name not in research_genomes():
+            raise HTTPException(404, "Unknown research experiment")
+        try:
+            return performance_report(conn, cfg, now_ms(), name=name, period=period,
+                                      side=side, result=result, search=search)
+        except ValueError:
+            raise HTTPException(400, "Invalid performance filter") from None
+
+    @app.get("/api/performance")
+    def performance_api(name: str = "all", period: str = "7d",
+                        side: str = "all", result: str = "all", search: str = ""):
         conn = db()
         try:
-            try:
-                result = forward_history(conn, cfg, name=name)
-            except ValueError:
-                raise HTTPException(404, "Unknown research bot") from None
+            return JSONResponse(verified_performance(conn, name, period, side, result, search))
+        finally:
+            conn.close()
+
+    @app.get("/api/performance.csv")
+    def performance_export(name: str = "all", period: str = "7d",
+                           side: str = "all", result: str = "all",
+                           search: str = "", kind: str = "trades"):
+        if kind not in ("trades", "equity"):
+            raise HTTPException(400, "Invalid CSV export kind")
+        conn = db()
+        try:
+            result_data = verified_performance(conn, name, period, side, result, search)
+            data = performance_csv(result_data, kind)
+        finally:
+            conn.close()
+        return Response(content=data, media_type="text/csv",
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="forward-paper-{kind}-{period}.csv"',
+                                 "Cache-Control": "no-store"})
+
+    @app.get("/research/forward", response_class=HTMLResponse)
+    def forward_evidence_page(name: str = "all", period: str = "7d",
+                              side: str = "all", result: str = "all",
+                              search: str = ""):
+        conn = db()
+        try:
+            data = verified_performance(conn, name, period, side, result, search)
             state = RiskState(conn)
             now = now_ms()
             hb = state.get(HEARTBEAT)
             alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
-            return page("Forward paper results", history_page(result),
+            return page("Profit and performance", performance_page(data),
                         summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
-                        tabs=[("/", "Dashboard"), ("#equity", "Equity history"),
-                              ("#trades", "Trade ledger")], alive=alive,
-                        current="performance")
+                        tabs=[("/bots", "My Bots"), ("#equity", "Profit chart"),
+                              ("#fees", "Fees"), ("#trades", "Trade history")],
+                        alive=alive, current="performance")
+        finally:
+            conn.close()
+
+    @app.get("/bots", response_class=HTMLResponse)
+    def bots_directory():
+        conn = db()
+        try:
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            return page("My Trading Bots", bots_index(conn, cfg),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
+        finally:
+            conn.close()
+
+    @app.get("/bots/research/{slug}", response_class=HTMLResponse)
+    def bot_research_detail(slug: str, period: str = "7d"):
+        try:
+            name = resolve_bot_slug(slug)
+            validate_performance(period)
+        except ValueError:
+            raise HTTPException(404, "Unknown bot or invalid period") from None
+        conn = db()
+        try:
+            now = now_ms()
+            state = RiskState(conn)
+            hb = state.get(HEARTBEAT)
+            return page("Research bot: " + name, research_detail(conn, cfg, now, name, period),
+                        summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/bots", "All bots"), ("#history", "Performance"),
+                              ("#activity", "Activity")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
+        finally:
+            conn.close()
+
+    @app.get("/bots/account/{account_id}", response_class=HTMLResponse)
+    def standard_bot_detail(account_id: int):
+        conn = db()
+        try:
+            now = now_ms()
+            state = RiskState(conn)
+            hb = state.get(HEARTBEAT)
+            try:
+                body = standard_account_detail(conn, account_id)
+            except ValueError:
+                raise HTTPException(404, "Unknown trading account") from None
+            return page("Trading bot account", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        tabs=[("/bots", "All bots")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="bots")
         finally:
             conn.close()
 
