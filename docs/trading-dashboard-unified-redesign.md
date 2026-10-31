@@ -89,11 +89,43 @@ all requested phases are completed, reviewed and safety-checked.
 - No changes to trade execution, evolution selection logic, research collection,
   risk caps, storage schema, live mode, or approval requirements.
 
-## Phase 4 — pending
+## Phase 4 — implemented on the SAME branch
 
-- Dedicated Safety and Settings pages, health explanations and protected
-  approval interfaces. All existing risk checks and authorization gates stay
-  effective.
+- Dedicated `/safety` page: plain-English active status, recent completed-loop
+  heartbeat, closed-candle freshness across the real configured Kraken pairs,
+  live-account exposure and warnings for any active guard lock.
+- Warns about kill switch, restart lock, reconciliation lock, owner pause, entry
+  halt, unexpired daily loss halt, invalid risk config, stale worker/feed, and
+  active live accounts while the displayed mode is PAPER.
+- Pair-level data freshness, last refresh errors and recorded risk events appear
+  in expandable and accessible detail views. **No button on this page clears
+  a lock, calls the exchange, changes orders or re-enables trading.**
+- `/settings`: read-only values and plain-language help for real-money risk caps,
+  pilot and independent signoffs, capital scaling, maker/taker execution model,
+  simulated accounts, research toggles, qualification thresholds and UTC jobs.
+  Values are sourced from the existing loaded config and risk evidence; no new
+  settings update/write API exists.
+- `/approvals`: separate readable owner approval queue for existing
+  `ready_to_graduate` standard paper bots, with observed forward-paper day/trade
+  evidence, original strategy description and risk explanation. Unqualified
+  research bots are excluded. Approve/decline forms require the same existing
+  `DASHBOARD_TOKEN`; if unavailable the page remains review-only and instructs
+  use of the original authenticated Telegram path.
+- **No new approval endpoint or bypass:** both buttons POST to the unchanged
+  `/bots/{bot_id}/{approve|decline}` route, which performs the same server-side
+  constant-time token check and `decide_graduation` call. New confirm dialogue
+  is user-interface feedback only, never authorization.
+- Existing approved/declined POST redirect now opens `/approvals`, so the
+  user sees the updated queue. Legacy `/advanced#bots` still contains all its
+  original controls.
+- `/api/safety/overview` gives a read-only structured snapshot with a strict
+  allowlist of settings, *never* exchange keys, passwords or token values.
+- Main sidebar Safety and Settings entries open their dedicated pages.
+- Added regression cases for all safety locks and read-only behavior, unchanged
+  token-gated approvals, no live fund allocation from approval, original routes,
+  absent token behavior and no secret value disclosure.
+- No change to RiskGuard, exchange reconciliation, historical qualification,
+  funded pilot gates, hard capital ceiling, trade execution, DB schema, or worker.
 
 ## Phase 5 — pending
 
