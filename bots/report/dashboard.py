@@ -32,6 +32,8 @@ from bots.paper.forward import evidence, net_hold_return, history
 from bots.live.pilot import pilot_status
 from bots.live.scale import scale_review
 from bots.report.daily import account_rows, summary
+from bots.report.home import home_dashboard
+from bots.report.design import shell_page
 from bots.paper.league import snapshot as lab_snapshot
 from bots.paper.forward_history import forward_history
 from bots.report.forward_page import history_page, overview_panel
@@ -335,21 +337,15 @@ OVERVIEW_TABS = [("#status", "Status"), ("#league", "Paper league"), ("#research
 
 
 def page(title: str, body: str, mode: str = "PAPER", heartbeat: str = "",
-         tabs: list[tuple[str, str]] | None = None, alive: bool = True) -> str:
-    tabs = OVERVIEW_TABS if tabs is None else tabs
-    nav = "".join(f'<a href="{href}">{escape(label)}</a>' for href, label in tabs)
-    nav += '<a href="/research/forward">Forward evidence</a>'
-    nav += '<a href="/graveyard">Graveyard</a><a href="/api/status">JSON</a>'
-    mode_cls = "live" if mode == "LIVE" else "paper"
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<meta name="theme-color" content="#2563eb">'
-            f'<title>{escape(title)}</title><style>{CSS}</style></head><body>'
-            f'<header class="top"><div class="bar"><a href="/" class="brand" '
-            f'style="color:inherit;text-decoration:none"><i class="{"" if alive else "off"}"></i>'
-            f'Trading Bots</a><span class="mode {mode_cls}">{escape(mode)}</span>'
-            f'<span class="hb">{heartbeat}</span></div><nav class="tabs">{nav}</nav></header>'
-            f'<main>{body}</main><script>{JS}</script></body></html>')
+         tabs: list[tuple[str, str]] | None = None, alive: bool = True,
+         current: str = "home") -> str:
+    """Shared shell: the same navigation and styling on every page.
+
+    The legacy technical sections remain fully accessible under /advanced.
+    Rendered data is unchanged; only presentation and routing are new.
+    """
+    html = shell_page(title, body, mode, heartbeat, tabs, current=current, alive=alive)
+    return html.replace("__BASE_CSS__", CSS).replace("__BASE_JS__", JS)
 
 
 def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastAPI:
@@ -456,7 +452,8 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             return page("Forward paper results", history_page(result),
                         summary(conn, now)["mode"], f"last trading loop {_ago(hb, now)}",
                         tabs=[("/", "Dashboard"), ("#equity", "Equity history"),
-                              ("#trades", "Trade ledger")], alive=alive)
+                              ("#trades", "Trade ledger")], alive=alive,
+                        current="performance")
         finally:
             conn.close()
 
@@ -508,6 +505,23 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
 
     @app.get("/", response_class=HTMLResponse)
     def overview():
+        """Simple default view: five clear numbers rather than technical reports."""
+        conn = db()
+        try:
+            st = RiskState(conn)
+            now = now_ms()
+            hb = st.get(HEARTBEAT)
+            alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
+            body = home_dashboard(conn, cfg, now)
+            return page("Home dashboard", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}",
+                        alive=alive, current="home")
+        finally:
+            conn.close()
+
+    @app.get("/advanced", response_class=HTMLResponse)
+    def advanced():
+        """Preserve all existing technical reports, decisions and approvals."""
         conn = db()
         try:
             st = RiskState(conn)
@@ -515,8 +529,9 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             hb = st.get(HEARTBEAT)
             alive = bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000
             body = _overview(conn, cfg, bool(env.get("DASHBOARD_TOKEN")))
-            return page("Trading bots", body, summary(conn, now)["mode"],
-                        f"last trading loop {_ago(hb, now)}", alive=alive)
+            return page("Technical dashboard", body, summary(conn, now)["mode"],
+                        f"last trading loop {_ago(hb, now)}", tabs=OVERVIEW_TABS,
+                        alive=alive, current="advanced")
         finally:
             conn.close()
 
@@ -528,8 +543,9 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             now = now_ms()
             hb = st.get(HEARTBEAT)
             return page("Graveyard", _graveyard(conn), summary(conn, now)["mode"],
-                        f"last trading loop {_ago(hb, now)}", tabs=[("/", "Overview")],
-                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000)
+                        f"last trading loop {_ago(hb, now)}", tabs=[("/advanced#evolution", "Learning & Research")],
+                        alive=bool(hb) and now - int(hb) < 3 * 60 * 60 * 1000,
+                        current="graveyard")
         finally:
             conn.close()
 
