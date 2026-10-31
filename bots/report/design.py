@@ -298,6 +298,13 @@ button:disabled{opacity:.55;cursor:not-allowed}
  .fee-legend span{font-size:11px}
 }
 
+
+.equity-interactive{position:relative}
+.forward-equity{cursor:crosshair;border-radius:11px;outline-offset:4px}
+.equity-chart-tip{font-size:12px;color:var(--ink-2);margin-top:8px;
+ padding:11px 13px;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+ font-variant-numeric:tabular-nums;min-height:42px}
+
 """
 NEXT_JS = """
 (function(){
@@ -330,6 +337,106 @@ NEXT_JS = """
       el.textContent=next==='dark'?'Light theme':'Dark theme';
     });
     el.textContent=root.getAttribute('data-theme')==='dark'?'Light theme':'Dark theme';
+  });
+
+  // Display each real observed point, without inventing intermediary prices.
+  document.querySelectorAll('.forward-equity[data-points]').forEach(function(svg){
+    var points, at=0;
+    try{points=JSON.parse(svg.getAttribute('data-points'));}catch(e){return;}
+    if(!points||!points.length)return;
+    var info=svg.parentElement.querySelector('.equity-chart-tip');
+    if(!info)return;
+    function cash(n){return (n>=0?'+':'')+'
+
+
+def shell_page(title: str, body: str, mode: str, heartbeat: str,
+               subnav: list[tuple[str, str]] | None = None,
+               current: str = "home", alive: bool = True) -> str:
+    label = {
+        "home": "Home dashboard",
+        "performance": "Performance",
+        "learning": "Learning & Research",
+        "safety": "System safety",
+        "settings": "Settings",
+        "bots": "My Bots",
+        "advanced": "Technical overview",
+        "graveyard": "Failed strategies",
+    }.get(current, "Trading dashboard")
+    links = "".join(
+        '<a href="' + escape(href, quote=True) + '"' +
+        (' aria-current="page"' if current == key else '') +
+        (' data-set-view="simple"' if key == "home" else '') +
+        '><span class="nav-icon" aria-hidden="true">' + symbol + '</span><span>' +
+        escape(name) + '</span></a>'
+        for key, name, href, symbol in NAV)
+    sub = ('<nav class="tabs section-jump" aria-label="Page sections">' +
+           "".join('<a href="' + escape(href, quote=True) + '">' +
+                   escape(name) + '</a>' for href, name in subnav) + '</nav>') if subnav else ''
+    mode_badge = ('<span class="mode live">REAL MONEY</span>' if mode == "LIVE"
+                  else '<span class="mode paper">FAKE MONEY ONLY</span>')
+    sidebar_notice = (
+        '<strong>Real-money mode</strong>Live trading can lose actual funds. '
+        'Review the Safety and Settings sections.'
+        if mode == "LIVE" else
+        '<strong>Research mode</strong>Your experimental bots use fake money. '
+        'Performance is simulated, not a guarantee of earnings.')
+    switch = ('<div class="view-switch" role="group" aria-label="Dashboard detail level">'
+              '<a href="/" data-set-view="simple" ' +
+              ('aria-current="true"' if current == "home" else 'aria-current="false"') +
+              '>Simple</a><a href="/advanced" data-set-view="advanced" ' +
+              ('aria-current="true"' if current == "advanced" else 'aria-current="false"') +
+              '>Advanced</a></div>')
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="theme-color" content="#111e36">'
+        '<title>' + escape(title) + ' · Trading Bots</title>'
+        '<style>__BASE_CSS__' + NEXT_CSS + '</style>'
+        '</head><body><div class="app-shell">'
+        '<aside class="side" aria-label="Primary navigation">'
+        '<a class="side-brand" href="/" data-set-view="simple">'
+        '<span class="brand-mark" aria-hidden="true">↗</span><span>TradePilot'
+        '<span class="brand-note" style="display:block">Bot Control Center</span></span></a>'
+        '<div><div class="side-group-label">Workspace</div>'
+        '<nav class="primary-nav" aria-label="Main">' + links + '</nav></div>'
+        '<div class="side-foot">' + sidebar_notice +
+        '<div style="margin-top:12px"><a href="/graveyard">Failed strategies</a> · '
+        '<a href="/api/status">System data</a></div></div></aside>'
+        '<div class="app-area"><header class="top"><div class="bar">'
+        '<div class="top-copy"><span class="top-eyebrow">Trading overview</span>'
+        '<div class="top-title">' + escape(label) + '</div></div>'
+        + mode_badge + switch
+        + '<button type="button" data-toggle-theme aria-label="Change color theme">Dark theme</button>'
+        + '<span class="hb">' + escape(heartbeat) + (' · online' if alive else ' · delayed') +
+        '</span></div>' + sub + '</header>'
+        '<main id="content">' + body + '</main>'
+        '<footer style="text-align:center;font-size:11px;color:var(--ink-3);padding:0 12px 26px">'
+        'Research results are simulated. No performance is guaranteed.</footer></div></div>'
+        '<script>__BASE_JS__' + NEXT_JS + '</script></body></html>'
+    )
++Number(n).toFixed(2);}
+    function show(i){
+      at=Math.max(0,Math.min(points.length-1,i));
+      var p=points[at];
+      var date=p.ts ? new Date(p.ts).toISOString().replace('T',' ').slice(0,16)+' UTC' :
+                  'Older observation, exact time unavailable';
+      info.textContent=date+' · Net '+cash(p.pnl)+' · Holding '+cash(p.hold);
+    }
+    svg.addEventListener('pointermove',function(e){
+      var bounds=svg.getBoundingClientRect();
+      if(!bounds.width)return;
+      var fraction=Math.max(0,Math.min(1,(e.clientX-bounds.left)/bounds.width));
+      var logical=fraction*790, start=80, span=690;
+      show(Math.round((logical-start)/span*(points.length-1)));
+    });
+    svg.addEventListener('click',function(e){if(points.length)show(at);});
+    svg.addEventListener('focus',function(){show(at);});
+    svg.addEventListener('keydown',function(e){
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+        e.preventDefault();
+        show(at+(e.key==='ArrowRight'?1:-1));
+      }
+    });
   });
 })();
 """
