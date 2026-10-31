@@ -88,7 +88,7 @@ def _stats_panel(stats: dict) -> str:
         ("Total simulated fees paid", _usd(stats["fees"])),
         ("Maximum drawdown", f'{stats["max_drawdown_pct"]:.2f}%'),
         ("Net buy-and-hold P&L", _usd(stats["benchmark_net_pnl"], True)),
-        ("Observed marks / UTC days", f'{stats["observed_hours"]} / {stats["observed_days"]}'),
+        ("Verified observed hours / UTC days", f'{stats["observed_hours"]} / {stats["observed_days"]}'),
         ("Open simulated positions", str(stats["open_positions"])),
     ]
     return ('<div class="grid">' + "".join(
