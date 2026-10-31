@@ -67,7 +67,9 @@ def _experiment(bot, feed_ok):
         '<div class="experiment-state ' + css + '">' + escape(state) + '</div>'
         '<div class="inline-tip">' + str(trade_count) + ' completed simulated trade' +
         ('s' if trade_count != 1 else '') + '</div>'
-        '</article>'
+        '<a class="bot-detail-link" href="/bots/research/' +
+        escape(name.casefold().replace(" ", "-"), quote=True) +
+        '">See what this bot is doing →</a></article>'
     )
 
 
@@ -226,7 +228,7 @@ def home_dashboard(conn: sqlite3.Connection, cfg: dict, now: int) -> str:
                 "Completed simulated trades appear in performance history.")
         + '</ul><div class="advanced-note">' + escape(progress_note) + '</div></section></div>'
         '<section id="my-bots"><div class="section-head"><h2>Your research bots</h2>'
-        '<a class="text-link" href="/research/forward">See each bot’s history →</a></div>'
+        '<a class="text-link" href="/bots">View all bot details →</a></div>'
         '<p class="help">These experiments do not qualify automatically for real-money '
         'trading. Profit can be positive or negative.</p>' + bot_cards
         + (f'<p class="inline-tip">Separately, {qualified_count} standard-pipeline '
