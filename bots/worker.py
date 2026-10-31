@@ -199,12 +199,22 @@ class Worker:
         if feed["healthy"] and not feed["last_errors"] and not self.state.get(
                 "market_refresh_process_error"):
             self.trader.deploy_candidates()
+        report = None
         try:
             report = self.trader.tick()
             if report.errors:
                 print("tick errors:", "; ".join(report.errors))
         except Exception as e:  # noqa: BLE001 - a broken loop must not open trades
             self.guard.halt_entries(f"trading loop error: {e}")
+        # Separate research-only league: never writes to candidate/real-money accounts.
+        # A failed lab experiment cannot halt the production PAPER worker.
+        try:
+            from bots.paper.league import tick as lab_tick
+            if feed["healthy"] and not feed["last_errors"] and report is not None and report.healthy:
+                lab_tick(self.conn, self.cfg, now_ms(), allow_entries=not bool(
+                    self.state.get("owner_pause") or self.state.get("entry_halt")))
+        except Exception as e:  # noqa: BLE001
+            print(f"Research paper league tick skipped: {e}", flush=True)
         # Re-assert the independent whitelist gate even if Trader saw only healthy
         # active-bot pairs and tried to lift a previous error halt.
         self._enforce_market_health()
@@ -283,6 +293,9 @@ class Worker:
             except Exception as e:  # noqa: BLE001 - stale mood blocks mood-filtered entries
                 print(f"Fear & Greed update failed: {e}")
         acfg = self.cfg.get("analyst") or {}
+        rcfg = self.cfg.get("research") or {}
+        if rcfg.get("enabled") and self._due("research", int(rcfg.get("hour_utc", 6))):
+            self._spawn("research")
         if acfg.get("enabled") and self._due("digest", acfg["hour_utc"]):
             self._spawn("digest")  # sends its own Telegram message
         if self._due("report", w["daily_report_hour_utc"]):
