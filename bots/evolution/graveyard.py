@@ -68,6 +68,14 @@ class Graveyard:
         )
         self._remember(g, diagnosis)
 
+    def prune(self, max_rows: int) -> int:
+        """Keep only the newest `max_rows` deaths. Every run adds thousands of rows, each with
+        its genome and metrics; without a cap the table grows until the disk is full."""
+        cur = self.conn.execute(
+            "DELETE FROM graveyard WHERE id <= (SELECT id FROM graveyard ORDER BY id DESC "
+            "LIMIT 1 OFFSET ?)", (max(0, int(max_rows)),))
+        return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
     def penalty(self, g: Genome) -> tuple[float, str | None]:
         """Penalty for resembling bots that died of the same cause, and that cause."""
         if not self._diag:

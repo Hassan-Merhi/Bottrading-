@@ -242,6 +242,9 @@ class EvolutionRun:
                 pool.shutdown()
         self.conn.execute("UPDATE runs SET finished_at=? WHERE run_id=?",
                           (datetime.now(timezone.utc).isoformat(), self.run_id))
+        max_rows = self.cfg["graveyard"].get("max_rows")
+        if max_rows:
+            self.graveyard.prune(max_rows)
         self.conn.commit()
         return result
 

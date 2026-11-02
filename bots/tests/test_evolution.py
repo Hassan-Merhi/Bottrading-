@@ -59,6 +59,19 @@ def test_graveyard_penalizes_similar_genomes(conn, cfg):
     assert "stopped out" in failure_summary(3, ["stopped out repeatedly in sideways market"])
 
 
+
+def test_graveyard_prune_keeps_only_the_newest_rows(conn, cfg):
+    gy = Graveyard(conn, cfg["graveyard"])
+    for gen in range(10):
+        gy.bury("r", gen, base_genome(), "bottom 50%", "too few trades to trust", "uptrend",
+                0.5, -1.0, {})
+    assert gy.prune(4) == 6
+    kept = [r[0] for r in conn.execute("SELECT generation FROM graveyard ORDER BY id")]
+    assert kept == [6, 7, 8, 9]
+    assert gy.prune(100) == 0
+    assert cfg["graveyard"]["max_rows"] > 0
+
+
 def small_cfg(cfg):
     cfg["evolution"].update(population_size=24, generations=4, workers=1, seed=42,
                             walk_forward_windows=3, finalists=3)
