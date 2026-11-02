@@ -144,6 +144,7 @@ graveyard:
   similarity_radius: 0.04                # genome distance (0–1) counted as "too similar"
   saturation: 5                          # this many similar deaths of one cause = full penalty
   penalty: 0.5                           # max fitness penalty
+  max_rows: 30000                        # keep the newest deaths only; older rows are deleted after each run
 
 # ---------------------------------------------------------------------------
 # Pipeline gates (section 5)
@@ -238,7 +239,7 @@ worker:
   daily_report_hour_utc: 8
   backup_hour_utc: 3
   backups_dir: backups
-  backups_keep: 14
+  backups_keep: 14                       # compact copies without price candles (candles re-download)
   offsite_backup: true                   # also send a copy (no candles) to your Telegram chat nightly
   healthy_ticks_to_resume: 3             # after an API/data error, healthy loops before new entries resume
   max_candle_age_multiple: 3             # latest closed candle older than this many timeframes = stale data

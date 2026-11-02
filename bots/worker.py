@@ -88,17 +88,62 @@ def send_offsite_backup(db_path: Path, alerter) -> str | None:
     return f"sent {size_kb:.0f} KB" if ok else "send failed"
 
 
-def backup_database(db_path: Path, backups_dir: Path, keep: int) -> Path:
-    """Consistent online copy via SQLite's backup API; keeps the newest `keep` files."""
+# Free space kept on the state disk. SQLite needs room for its WAL and journal; when the
+# disk filled on 2026-11-01 every startup write failed and the worker crash-looped.
+DISK_RESERVE_BYTES = 64 * 1024 * 1024
+
+
+def _backup_files(backups_dir: Path) -> list[Path]:
+    """Backups, oldest first. Old full copies (bots-*.db, candles included) sort before the
+    compact ones (bots-*.sqlite.gz) so they are the first to go."""
+    if not backups_dir.is_dir():
+        return []
+    files = list(backups_dir.glob("bots-*.db")) + list(backups_dir.glob("bots-*.sqlite.gz"))
+    return sorted(files, key=lambda f: (f.name.endswith(".sqlite.gz"), f.name.split(".")[0]))
+
+
+def free_disk_space(state_dir: Path, backups_dir: Path,
+                    reserve: int = DISK_RESERVE_BYTES) -> list[str]:
+    """Delete the oldest backups until `reserve` bytes are free on the state disk.
+
+    Returns what was removed. The live database is never touched.
+    """
+    removed: list[str] = []
+    files = _backup_files(backups_dir)
+    while files and shutil.disk_usage(state_dir).free < reserve:
+        old = files.pop(0)
+        size_mb = old.stat().st_size / 1_048_576
+        old.unlink()
+        removed.append(f"{old.name} ({size_mb:.0f} MB)")
+    return removed
+
+
+def backup_database(db_path: Path, backups_dir: Path, keep: int,
+                    reserve: int = DISK_RESERVE_BYTES) -> Path:
+    """Nightly compact backup: every table except price candles, gzip-compressed.
+
+    Candles are most of the database and re-download, so full copies are not kept; 14 of
+    them filled the 1 GB disk. Keeps the newest `keep` compact backups, removes old full
+    copies, and refuses to run if the disk would be left without `reserve` bytes free.
+    """
     backups_dir.mkdir(parents=True, exist_ok=True)
-    out = backups_dir / f"bots-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.db"
-    src = sqlite3.connect(str(db_path))
-    dst = sqlite3.connect(str(out))
-    with dst:
-        src.backup(dst)
-    src.close()
-    dst.close()
-    for old in sorted(backups_dir.glob("bots-*.db"))[:-keep]:
+    for old in _backup_files(backups_dir)[:-max(1, keep - 1)]:
+        old.unlink()
+    free_disk_space(db_path.parent, backups_dir, reserve)
+    if shutil.disk_usage(backups_dir).free < reserve:
+        raise OSError("not enough free disk space for a backup; the database itself is "
+                      "close to filling the disk")
+    out = backups_dir / f"bots-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.sqlite.gz"
+    try:
+        export_state(db_path, out)
+    except Exception:
+        out.unlink(missing_ok=True)
+        out.with_suffix(".db").unlink(missing_ok=True)
+        raise
+    for old in _backup_files(backups_dir):
+        if old.name.endswith(".db"):
+            old.unlink()
+    for old in _backup_files(backups_dir)[:-keep]:
         old.unlink()
     return out
 
@@ -122,8 +167,15 @@ class Worker:
     # -- startup / shutdown ------------------------------------------------
 
     def startup(self) -> None:
+        # Make room before the first write: on a full disk even the crash marker below fails.
+        freed = free_disk_space(self.db_path.parent, resolve_path(self.cfg["worker"]["backups_dir"]))
         self.conn = connect(self.db_path)
         self.state = RiskState(self.conn)
+        if freed:
+            self.state.log("disk_cleanup", "Low disk space at startup; removed old backups: "
+                                           + ", ".join(freed))
+            self.alerter.alert("The state disk was almost full, so old backups were removed: "
+                               + ", ".join(freed), kind="risk")
         if self.state.is_set(RUNNING):
             self.state.set(CRASH_LOCK, "previous run stopped without a clean shutdown")
             self.state.log("crash_restart", "Restarted after an unclean stop; staying in PAPER "

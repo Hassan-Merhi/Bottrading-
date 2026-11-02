@@ -68,15 +68,69 @@ def test_loop_once_survives_errors_and_halts_entries(cfg, tmp_path):
     w.shutdown()
 
 
-def test_backup_keeps_newest(tmp_path):
+def test_backup_keeps_newest_compact_copies_and_drops_old_full_copies(tmp_path):
+    from bots.db import connect
     db = tmp_path / "x.db"
-    sqlite3.connect(db).execute("CREATE TABLE t (a)")
+    conn = connect(db)
+    conn.execute("INSERT INTO candles VALUES ('BTC/USD','15m',1,1,1,1,1,1)")
+    conn.execute("INSERT INTO meta VALUES ('k','v')")
+    conn.commit()
+    conn.close()
+    backups = tmp_path / "b"
+    backups.mkdir()
+    legacy = backups / "bots-20261030-030000.db"   # an old full copy, candles included
+    legacy.write_bytes(b"x" * 1000)
+    import time
     for _ in range(3):
-        out = backup_database(db, tmp_path / "b", keep=2)
-        assert out.exists()
-        import time
+        out = backup_database(db, backups, keep=2)
+        assert out.exists() and out.name.endswith(".sqlite.gz")
         time.sleep(1.05)
-    assert len(list((tmp_path / "b").glob("bots-*.db"))) == 2
+    assert not legacy.exists()
+    assert len(list(backups.glob("bots-*.sqlite.gz"))) == 2
+    assert not list(backups.glob("*.db"))
+    import gzip
+    restored = tmp_path / "restored.db"
+    restored.write_bytes(gzip.open(sorted(backups.glob("*.sqlite.gz"))[-1]).read())
+    tables = {r[0] for r in sqlite3.connect(restored).execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "meta" in tables and "candles" not in tables
+
+
+def test_free_disk_space_removes_oldest_backups_first(tmp_path, monkeypatch):
+    import shutil
+    from collections import namedtuple
+    from bots import worker
+    backups = tmp_path / "b"
+    backups.mkdir()
+    names = ["bots-20261101-030000.sqlite.gz", "bots-20261028-030000.db",
+             "bots-20261031-030000.db", "bots-20261102-030000.sqlite.gz"]
+    for n in names:
+        (backups / n).write_bytes(b"x")
+    usage = namedtuple("usage", "total used free")
+    frees = iter([0, 0, 100])                  # full, still full, then enough
+    monkeypatch.setattr(shutil, "disk_usage", lambda _p: usage(1, 1, next(frees, 100)))
+    removed = worker.free_disk_space(tmp_path, backups, reserve=50)
+    assert [r.split(" ")[0] for r in removed] == ["bots-20261028-030000.db",
+                                                  "bots-20261031-030000.db"]
+    assert sorted(p.name for p in backups.iterdir()) == ["bots-20261101-030000.sqlite.gz",
+                                                         "bots-20261102-030000.sqlite.gz"]
+
+
+def test_startup_frees_disk_before_its_first_write(cfg, tmp_path, monkeypatch):
+    from bots import worker
+    calls = []
+    monkeypatch.setattr(worker, "free_disk_space",
+                        lambda state_dir, backups_dir, reserve=0: calls.append(state_dir)
+                        or ["bots-20261028-030000.db (180 MB)"])
+    real_connect = worker.connect
+    monkeypatch.setattr(worker, "connect",
+                        lambda path: (calls.append("connect"), real_connect(path))[1])
+    cfg["worker"]["backups_dir"] = str(tmp_path / "backups")
+    w, alerts = make_worker(cfg, tmp_path)
+    w.startup()
+    assert calls[:2] == [tmp_path, "connect"]
+    assert w.conn.execute("SELECT COUNT(*) FROM risk_events WHERE kind='disk_cleanup'").fetchone()[0] == 1
+    w.shutdown()
 
 
 def test_export_state_skips_candles_and_sends_offsite(tmp_path):
