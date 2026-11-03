@@ -188,6 +188,40 @@ def cmd_research(cfg, conn, args) -> None:
     print(json.dumps(run_research(conn, cfg), indent=2))
 
 
+def cmd_arb_scan(cfg, conn, args) -> None:
+    """One read-only pass over public order books and funding rates; prints what it saw."""
+    import json
+    from bots.arb.paper import tick as arb_paper_tick
+    from bots.arb.scanner import make_venues, scan
+    from bots.data.fetch import make_exchange
+
+    acfg = cfg.get("arbitrage") or {}
+    if not acfg.get("enabled", False):
+        sys.exit("arbitrage.enabled is false in config.yaml")
+    futures = None
+    if (acfg.get("funding") or {}).get("enabled"):
+        futures = make_exchange(acfg["funding"].get("venue", "krakenfutures"))
+    result = scan(conn, cfg, make_venues(acfg), futures_api=futures)
+    paper = arb_paper_tick(conn, cfg, result.get("edges") or [])
+    edges = sorted(result.get("edges") or [], key=lambda e: e["net_pct"], reverse=True)
+    for e in edges:
+        print(f"{e['pair']:9s} buy {e['buy_venue']:>16s} {e['buy_price']:>12.4f}  "
+              f"sell {e['sell_venue']:>16s} {e['sell_price']:>12.4f}  gap {100 * e['gross_pct']:+.3f}%  "
+              f"net after fees {100 * e['net_pct']:+.3f}%  (${e['net_usd']:+.3f} on ${e['size_usd']:.0f})")
+    print(json.dumps({k: v for k, v in result.items() if k != "edges"} | {"paper": paper},
+                     indent=2, default=str))
+
+
+def cmd_arb_report(cfg, conn, args) -> None:
+    import json
+    from bots.arb.report import snapshot, text_summary
+
+    snap = snapshot(conn, cfg)
+    print(text_summary(snap))
+    if getattr(args, "json", False):
+        print(json.dumps(snap, indent=2, default=str))
+
+
 def cmd_backup(cfg, conn, args) -> None:
     from bots.worker import backup_database, send_offsite_backup
 
@@ -296,6 +330,9 @@ def main(argv: list[str] | None = None) -> None:
     dg = sub.add_parser("digest", help="AI analyst: write and send today's market briefing")
     dg.add_argument("--no-send", action="store_true", help="print only, no Telegram message")
     sub.add_parser("watchdog", help="alert if the worker has stopped reporting")
+    sub.add_parser("arb-scan", help="one read-only arbitrage scan of public order books")
+    ar = sub.add_parser("arb-report", help="what the arbitrage scanner has seen so far")
+    ar.add_argument("--json", action="store_true")
     audit = sub.add_parser("audit-live", help="read-only verification of live Kraken orders")
     audit.add_argument("--acknowledge", action="store_true",
                        help="clear reconciliation lock only after a successful authenticated audit")
@@ -311,7 +348,7 @@ def main(argv: list[str] | None = None) -> None:
     {"fetch": cmd_fetch, "import-csv": cmd_import_csv, "update": cmd_update, "fetch-mood": cmd_fetch_mood,
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
      "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "research": cmd_research,
-     "watchdog": cmd_watchdog,
+     "watchdog": cmd_watchdog, "arb-scan": cmd_arb_scan, "arb-report": cmd_arb_report,
      "confirm-live": cmd_confirm_live, "audit-live": cmd_audit_live}[args.cmd](cfg, conn, args)
 
 

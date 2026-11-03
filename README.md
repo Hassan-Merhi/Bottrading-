@@ -29,7 +29,9 @@ python -m bots.main fetch          # 3 years of 15m candles + Fear & Greed, ~2 m
 python -m bots.main import-csv XBTUSD_15.csv --pair BTC/USD --timeframe 15m
 python -m bots.main status
 
-# 2. Evolution (200 bots x 100 generations). Writes runs/<id>.md.
+# 2. Evolution (200 bots x 100 generations). Writes runs/<id>.md. Each run starts
+#    with evolution.carry_over_fraction of its bots taken from the previous run's
+#    best, so nightly runs continue one search instead of restarting from random.
 python -m bots.main evolve
 python -m bots.main evolve --synthetic   # random-walk data: pipeline check only
 
@@ -60,6 +62,17 @@ The worker, every `worker.poll_seconds`:
 
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
+
+## Arbitrage scanner (read-only, fake money)
+
+The worker also measures cross-venue arbitrage: it reads live order books on
+Kraken and Coinbase, walks them for a `$20` order and records the net result
+after both taker fees and slippage, every two minutes. A paper account with
+cash and coin pre-positioned on both venues takes the trade when the net edge
+clears `arbitrage.min_net_edge_pct`. Funding-rate carry on Kraken Futures is
+reported the same way. Nothing is ever ordered. See `/arbitrage` on the
+dashboard, `python -m bots.main arb-scan`, and [docs/arbitrage.md](docs/arbitrage.md),
+which also shows why the break-even gap at Tier 1 fees is about 1.5%.
 
 ## Phase 8: evaluate real profits before any manual scaling
 

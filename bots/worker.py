@@ -163,6 +163,8 @@ class Worker:
         self._backfill_at = 0.0
         self._market_refresh: subprocess.Popen | None = None
         self._market_refresh_at = 0.0
+        self._arb_venues: dict | None = None
+        self._arb_futures = None
 
     # -- startup / shutdown ------------------------------------------------
 
@@ -268,6 +270,12 @@ class Worker:
                     price_source=self.trader.md)
         except Exception as e:  # noqa: BLE001
             print(f"Research paper league tick skipped: {e}", flush=True)
+        # Arbitrage scanner + paper arbitrage: public order books only, fake money.
+        # Its own failures never touch the trading loop or the risk guard.
+        try:
+            self._arbitrage_tick()
+        except Exception as e:  # noqa: BLE001
+            print(f"Arbitrage scan skipped: {e}", flush=True)
         # Re-assert the independent whitelist gate even if Trader saw only healthy
         # active-bot pairs and tried to lift a previous error halt.
         self._enforce_market_health()
@@ -277,6 +285,31 @@ class Worker:
             poll(lambda bot_id, ok, who: decide_graduation(self.conn, bot_id, ok, who),
                  self._command)
         self._scheduled()
+
+    def _arbitrage_tick(self) -> None:
+        acfg = self.cfg.get("arbitrage") or {}
+        if not acfg.get("enabled", False):
+            return
+        now = now_ms()
+        last = self.state.get("arb_last_scan_ms")
+        if last and now - int(last) < int(acfg.get("scan_seconds", 120)) * 1000:
+            return
+        from bots.arb.paper import tick as arb_paper_tick
+        from bots.arb.scanner import make_venues, scan
+
+        if self._arb_venues is None:
+            self._arb_venues = make_venues(acfg)
+            fcfg = acfg.get("funding") or {}
+            if fcfg.get("enabled"):
+                from bots.data.fetch import make_exchange
+                self._arb_futures = make_exchange(fcfg.get("venue", "krakenfutures"))
+        self.state.set("arb_last_scan_ms", str(now))
+        result = scan(self.conn, self.cfg, self._arb_venues, now, futures_api=self._arb_futures)
+        if result.get("errors"):
+            print("arbitrage scan errors: " + "; ".join(
+                f"{k}: {v}" for k, v in result["errors"].items()), flush=True)
+        arb_paper_tick(self.conn, self.cfg, result.get("edges") or [], now,
+                       allow_entries=not bool(self.state.get("owner_pause")))
 
     HELP = ("Commands:\n/status - today's numbers\n/bots - every running bot\n"
             "/digest - this morning's briefing\n/pause - stop opening new trades "

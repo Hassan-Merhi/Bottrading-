@@ -82,6 +82,10 @@ evolution:
   elite_fraction: 0.15                   # top 10–20% survive and breed
   death_fraction: 0.5                    # bottom 50% die each generation
   newcomer_fraction: 0.10                # random newcomers each generation
+  # Start each run with this share of the population taken from the best bots of
+  # the previous run's final generation, so nightly runs continue one search
+  # instead of restarting from random bots. 0 = every run starts from scratch.
+  carry_over_fraction: 0.25
   mutation_rate: 0.3                     # per-gene probability of mutating
   mutation_scale: 0.10                   # ±10% on numeric genes
   # Maintain coverage across independent coin/strategy combinations without
@@ -169,6 +173,38 @@ research:
 research_league:
   enabled: true
   allocation_usd: 20
+
+# ---------------------------------------------------------------------------
+# Arbitrage scanner and paper arbitrage. Read-only against every exchange:
+# public order books and funding rates only. Fake money. Never places orders.
+# ---------------------------------------------------------------------------
+arbitrage:
+  enabled: true
+  scan_seconds: 120                      # fetch order books this often
+  size_usd: 20                           # notional per leg, walked through the live book
+  inventory_multiple: 3                  # paper account holds this many trades' worth of cash and coin per venue
+  min_net_edge_pct: 0.10                 # paper-trade only when the edge after ALL costs is at least this
+  slippage_pct: 0.05                     # extra per leg on top of the walked book price
+  keep_days: 90
+  pairs: [BTC/USD, ETH/USD, SOL/USD, XRP/USD, LINK/USD, ADA/USD, DOGE/USD]
+  # Venues compared against each other. taker_fee_pct is YOUR fee on that venue
+  # (lowest tier assumed). A venue quoted in USDT is not the same as USD:
+  # the gap includes the USDT/USD basis, so it is off by default.
+  venues:
+    kraken: {taker_fee_pct: 0.80, quote: USD}
+    coinbaseexchange: {taker_fee_pct: 0.60, quote: USD}
+    binance: {taker_fee_pct: 0.10, quote: USDT, enabled: false}
+  # Funding-rate carry: long spot + short perpetual, collect funding. Measured
+  # from Kraken Futures' public funding rates; costs are four taker fills.
+  funding:
+    enabled: true
+    venue: krakenfutures
+    symbols: ["BTC/USD:USD", "ETH/USD:USD", "SOL/USD:USD"]
+    interval_hours: 8                    # Kraken Futures pays funding hourly on a rate quoted per hour;
+                                         # ccxt normalises it; re-check against the exchange's docs
+    spot_taker_fee_pct: 0.80
+    futures_taker_fee_pct: 0.05
+    hold_days: 30                        # amortise entry+exit costs over this holding period
 
 # ---------------------------------------------------------------------------
 # RISK RULES (section 6). Non-negotiable. Ask the owner before changing.
