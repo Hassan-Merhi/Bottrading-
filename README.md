@@ -58,7 +58,11 @@ The worker, every `worker.poll_seconds`:
   gate (30+ days, profitable after fees, drawdown < 10%, 20+ trades, beat
   holding), returns live bots that broke their limits to paper, and gives
   approved bots a live allocation when LIVE is unlocked;
-- nightly: evolution (own process), daily Telegram report, database backup.
+- nightly: evolution (own process), daily Telegram report, database backup;
+- hourly (`telegram.hourly_report`): a Telegram update listing every bot with its
+  coin, timeframe, money, this hour's change and trades, plus anything that was
+  born, died or moved on, and the arbitrage scanner's hour. `python -m bots.main hourly`
+  prints the same text.
 
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.

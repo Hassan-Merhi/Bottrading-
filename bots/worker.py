@@ -421,6 +421,18 @@ class Worker:
                 update_fear_greed(self.conn)
             except Exception as e:  # noqa: BLE001 - stale mood blocks mood-filtered entries
                 print(f"Fear & Greed update failed: {e}")
+        if (self.cfg.get("telegram") or {}).get("hourly_report", False):
+            last = self.state.get("last_hourly_report")
+            if last is None:
+                self.state.set("last_hourly_report", hour)  # no burst right after a restart
+            elif last != hour:
+                self.state.set("last_hourly_report", hour)
+                try:
+                    from bots.report.hourly import chunks, hourly_report_text
+                    for part in chunks(hourly_report_text(self.conn, self.cfg, now_ms())):
+                        self.alerter.alert(part, kind="report")
+                except Exception as e:  # noqa: BLE001 - a report must never stop trading
+                    print(f"hourly report failed: {e}", flush=True)
         acfg = self.cfg.get("analyst") or {}
         rcfg = self.cfg.get("research") or {}
         if rcfg.get("enabled") and self._due("research", int(rcfg.get("hour_utc", 6))):

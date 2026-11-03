@@ -136,3 +136,28 @@ def test_worker_detects_failed_refresh_process(cfg, tmp_path):
     assert worker._market_refresh is None
     assert worker.state.get("market_refresh_process_error") == "refresh exited with code 1"
     worker.shutdown()
+
+
+def test_candle_closed_seconds_after_the_clock_reading_is_fresh_not_stale():
+    """A refresh straddling a 15-minute boundary must not report the newer candle as stale."""
+    from bots.db import connect
+    from bots.data.health import market_health
+    from bots.config import load_config
+    import copy
+    cfg = copy.deepcopy(load_config()); cfg["data"]["pairs"] = ["BTC/USD"]
+    conn = connect(":memory:")
+    step = 900_000
+    boundary = 1_800_000_000_000 // step * step
+    for k in range(100):
+        ts = boundary - (99 - k) * step
+        conn.execute("INSERT INTO candles(pair,timeframe,ts,open,high,low,close,volume) VALUES(?,?,?,?,?,?,?,?)",
+                     ("BTC/USD", "15m", ts, 1, 1, 1, 1, 1))
+    conn.commit()
+    # Latest stored candle opened at `boundary`, so it closed at boundary + step.
+    # The clock reading is 10 seconds BEFORE that close: a straddled refresh.
+    h = market_health(conn, cfg, boundary + step - 10_000)
+    assert h["pairs"]["BTC/USD"]["status"] == "fresh" and h["healthy"]
+    # A full candle in the future is still never healthy.
+    assert market_health(conn, cfg, boundary - 1)["pairs"]["BTC/USD"]["status"] == "stale"
+    # And a genuinely stale one stays stale.
+    assert market_health(conn, cfg, boundary + 5 * step)["pairs"]["BTC/USD"]["status"] == "stale"

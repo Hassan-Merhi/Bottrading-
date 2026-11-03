@@ -35,8 +35,11 @@ def market_health(conn, cfg: dict, clock_ms: int | None = None) -> dict[str, Any
             "ORDER BY ts", (pair, tf, now - 24 * 3_600_000))]
         gaps = sum(max(0, (later - earlier) // step - 1)
                    for earlier, later in zip(recent, recent[1:]))
-        # Future-dated records and absent candles are never healthy.
-        fresh = age is not None and 0 <= age <= max_age
+        # Absent candles and far-future records are never healthy. A candle that
+        # closed a few seconds after the caller's clock reading is not stale: a
+        # refresh of 14 pairs straddles candle boundaries, and clocks differ a
+        # little between here and the exchange.
+        fresh = age is not None and -step < age <= max_age
         status = ("missing" if last is None else
                   "stale" if not fresh else "gapped" if gaps else "fresh")
         pairs[pair] = {
@@ -87,7 +90,11 @@ def refresh_market_pairs(conn, exchange, cfg: dict, clock_ms: int | None = None)
         except Exception as exc:  # one failed pair must not prevent the others refreshing
             errors.append(f"{pair}: {type(exc).__name__}: {exc}")
             counts[pair] = 0
-    health = market_health(conn, cfg, now)
+    # Judge freshness by the clock AFTER the fetches, not the one taken before
+    # them: fetching every pair takes seconds, and a candle that closed in between
+    # was, for the pairs fetched after it, correctly stored as closed.
+    after = int(time.time() * 1000) if clock_ms is None else now
+    health = market_health(conn, cfg, after)
     errors += [f"{pair}: {health['pairs'][pair]['status']}"
                for pair in health["unhealthy_pairs"] if not any(
                    line.startswith(f"{pair}:") for line in errors)]
@@ -95,7 +102,7 @@ def refresh_market_pairs(conn, exchange, cfg: dict, clock_ms: int | None = None)
     set_meta(conn, LAST_ERRORS, message[:2000])
     if not errors:
         set_meta(conn, LAST_SUCCESS, str(now))
-    health = market_health(conn, cfg, now)
+    health = market_health(conn, cfg, after)
     health["healthy"] = not errors
     health["updated_candles"] = counts
     health["errors"] = errors
