@@ -18,8 +18,11 @@ ORDER_METHOD = re.compile(
     re.IGNORECASE)
 # The only places allowed to make such calls, and why.
 ALLOWED = {
-    ("risk/guard.py", "*"),                                  # the single gate
+    ("risk/guard.py", "*"),                                  # the gate for the strategy bots
     ("live/exchange.py", "privatePostWithdrawMethods"),      # read-only permission probe
+    # The second and only other order path: live arbitrage, IOC limit legs behind
+    # its own confirmation file, paper-evidence gate and halt (bots/arb/live.py).
+    ("arb/live.py", "create_order"),
 }
 
 

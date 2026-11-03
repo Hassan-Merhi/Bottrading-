@@ -37,9 +37,47 @@ python -m bots.main arb-scan      # one pass, prints every edge it saw
 python -m bots.main arb-report    # summary of everything stored so far (--json for detail)
 ```
 
+## Live arbitrage (real money, locked by default)
+
+`bots/arb/live.py` can place real orders, $50 per leg, but only while every
+one of these holds at the moment of each trade. Any one failing means no order:
+
+1. `MODE=LIVE` in the environment and `arbitrage.live.enabled: true`.
+2. `ARB_LIVE_CONFIRMED.txt` in the state directory (`/data` on Render)
+   containing exactly `arbitrage.live.max_total_capital_usd`, typed by you.
+   Code ceilings: $500 total, $100 per leg. `size_usd` must equal
+   `per_trade_usd`, so the live edge is the one the scanner measured.
+3. API keys with trade permission and no withdrawal permission for every
+   venue: `KRAKEN_API_KEY`/`KRAKEN_API_SECRET` (the key is proven unable to
+   withdraw before use) and `COINBASE_API_KEY`/`COINBASE_API_SECRET`/
+   `COINBASE_API_PASSPHRASE`.
+4. Paper evidence: at least `min_paper_days` of scanning, `min_paper_trades`
+   paper arbitrages, and the paper account ahead of holding. If the scanner
+   never finds an edge, this gate never opens, and that is the intended result.
+5. No kill switch, crash lock, entry halt, owner pause, or arbitrage halt.
+6. The edge on this scan clears `live.min_net_edge_pct` (stricter than paper),
+   the real free balances cover both legs, the order is above the exchange
+   minimum, and today's trade count and losses are within limits.
+
+Execution: the sell leg goes first as an immediate-or-cancel limit at the
+walked bid minus the slippage allowance; the buy leg follows for exactly the
+quantity that sold, as an IOC limit at the walked ask plus allowance. Neither
+leg can fill worse than the edge assumed. If the fills do not match, or a leg
+errors, the trade is recorded as `legged` or `error`, live arbitrage halts
+itself, and you get a critical Telegram alert. It never unwinds on its own:
+check both venues, then send `/arbresume confirm` to clear the halt.
+
+`python -m bots.main arb-live-status` prints every current blocker. The
+`/arbitrage` page shows the same under "Real-money arbitrage".
+
+What it still does not cover: withdrawal fees and transfers (inventory must
+already sit on both venues), the other side moving between your two orders,
+and venue outages mid-trade beyond the halt described above.
+
 ## What it does not do
 
-- It never sends an order. There is no live arbitrage path in this codebase.
+- It never sends an order unless every live gate above is open; by default
+  none of them is.
 - It does not model transfers. Real cross-venue arbitrage without inventory on
   both sides means withdrawing coin from one exchange to the other, which takes
   minutes to hours and costs a withdrawal fee; the gap is gone long before.

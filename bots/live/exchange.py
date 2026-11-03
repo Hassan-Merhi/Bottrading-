@@ -59,3 +59,22 @@ def check_cannot_withdraw(exchange) -> None:
 def check_can_query(exchange) -> None:
     """The key must at least read balances, or live trading cannot be checked."""
     exchange.fetch_balance()
+
+
+def make_authenticated_venue(name: str, credentials: dict, env: dict | None = None):
+    """An authenticated ccxt client for any venue (used by live arbitrage).
+
+    `credentials` carries apiKey, secret and, where the venue needs one,
+    password. A Kraken key is proven unable to withdraw before it is returned;
+    every key must at least read balances.
+    """
+    import ccxt
+
+    from bots.data.fetch import proxy_options
+
+    env = env if env is not None else os.environ
+    client = getattr(ccxt, name)({**credentials, "enableRateLimit": True, **proxy_options(env)})
+    if name == "kraken":
+        check_cannot_withdraw(client)
+    check_can_query(client)
+    return client

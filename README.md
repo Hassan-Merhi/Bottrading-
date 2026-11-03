@@ -70,7 +70,9 @@ Kraken and Coinbase, walks them for a `$20` order and records the net result
 after both taker fees and slippage, every two minutes. A paper account with
 cash and coin pre-positioned on both venues takes the trade when the net edge
 clears `arbitrage.min_net_edge_pct`. Funding-rate carry on Kraken Futures is
-reported the same way. Nothing is ever ordered. See `/arbitrage` on the
+reported the same way. A real-money path exists but is locked by default
+behind its own confirmation file, API keys for both venues, and paper
+evidence; see the docs. See `/arbitrage` on the
 dashboard, `python -m bots.main arb-scan`, and [docs/arbitrage.md](docs/arbitrage.md),
 which also shows why the break-even gap at Tier 1 fees is about 1.5%.
 

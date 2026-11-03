@@ -83,6 +83,32 @@ def arbitrage_page(snap: dict, now: int) -> str:
                         f"${t['fees']:.3f}", f"${t['net_usd']:+.3f}"] for t in paper.get("last_trades") or []]))
                      if paper.get("last_trades") else "")
                   + '</section>')
+    live = snap.get("live") or {}
+    if live.get("enabled"):
+        state_txt = "HALTED" if live.get("halt") else ("READY: will trade when an edge clears" if live.get("ready") else "Locked")
+        live_html = ('<section id="live"><h2>Real-money arbitrage</h2>'
+                     '<p class="help">Enabled in config. It trades only while every gate below passes, '
+                     f'${float(live.get("per_trade_usd") or 0):.0f} per leg, within '
+                     f'${float(live.get("max_total_capital_usd") or 0):.0f} of confirmed capital.</p>'
+                     '<div class="safety-status-grid">'
+                     + _status_card("State", state_txt, live.get("halt") or "", "warn" if live.get("halt") else "")
+                     + _status_card("Real trades", str(live.get("trades", 0)),
+                                    f"{live.get('legged', 0)} with unequal fills")
+                     + _status_card("Net result", f"${live.get('net_usd', 0):+.2f}",
+                                    f"after ${live.get('fees_usd', 0):.2f} fees")
+                     + '</div>'
+                     + (('<h3>Why it is not trading right now</h3><ul>' + "".join(
+                         f"<li>{escape(str(b))}</li>" for b in live.get("blockers") or []) + '</ul>')
+                        if live.get("blockers") else "")
+                     + (('<h3>Last real trades</h3>' + _table(
+                         ["When", "Pair", "Status", "Bought", "Sold", "Fees", "Net", "Detail"],
+                         [[_date(t["ts"]), t["pair"], t["status"], f"{t['buy_filled']:.6f}", f"{t['sell_filled']:.6f}",
+                           f"${t['fees']:.3f}", f"${t['net_usd']:+.3f}", t["detail"]] for t in live.get("last_trades") or []]))
+                        if live.get("last_trades") else "")
+                     + '</section>')
+    else:
+        live_html = ('<section id="live"><h2>Real-money arbitrage</h2><p class="help">Off. '
+                     'arbitrage.live.enabled is false; nothing here can place an order.</p></section>')
     funding = snap.get("funding") or []
     funding_html = ('<section id="funding"><h2>Funding-rate carry</h2>'
                     '<p class="help">Long the coin on spot, short the same amount of perpetual futures, '
@@ -99,7 +125,7 @@ def arbitrage_page(snap: dict, now: int) -> str:
     errors = snap.get("scan_errors") or []
     err_html = ('<section><h2>Scan problems in the last 24 hours</h2>' + _table(
         ["When", "Venue", "Detail"], [[_date(e["ts"]), e["venue"], e["detail"]] for e in errors]) + '</section>') if errors else ""
-    return head + kpis + edges + paper_html + funding_html + err_html
+    return head + kpis + edges + paper_html + live_html + funding_html + err_html
 
 
 def _breakeven_text(snap: dict) -> str:

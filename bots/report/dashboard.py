@@ -388,7 +388,7 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             s["scaling"] = scale_review(conn, cfg, now_ms())
             s["research_league"] = lab_snapshot(conn, cfg)
             s["research"] = research_snapshot(conn, cfg)
-            s["arbitrage"] = arb_snapshot(conn, cfg, now_ms())
+            s["arbitrage"] = arb_snapshot(conn, cfg, now_ms(), env)
             return JSONResponse(json.loads(json.dumps(s, default=str)))
         finally:
             conn.close()
@@ -398,7 +398,7 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
         """Read-only: observed cross-venue edges, paper arbitrage, funding carry."""
         conn = db()
         try:
-            return JSONResponse(json.loads(json.dumps(arb_snapshot(conn, cfg, now_ms()),
+            return JSONResponse(json.loads(json.dumps(arb_snapshot(conn, cfg, now_ms(), env),
                                                       default=str)))
         finally:
             conn.close()
@@ -410,10 +410,10 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             now = now_ms()
             hb = RiskState(conn).get(HEARTBEAT)
             data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
-            return page("Arbitrage", arbitrage_page(arb_snapshot(conn, cfg, now), now),
+            return page("Arbitrage", arbitrage_page(arb_snapshot(conn, cfg, now, env), now),
                         data["mode"], f"last trading loop {_ago(hb, now)}",
                         tabs=[("#edges", "Price gaps"), ("#paper", "Paper trades"),
-                              ("#funding", "Funding carry")],
+                              ("#live", "Real money"), ("#funding", "Funding carry")],
                         alive=data["worker_healthy"], current="arbitrage")
         finally:
             conn.close()
