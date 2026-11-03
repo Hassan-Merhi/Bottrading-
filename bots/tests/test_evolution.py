@@ -313,3 +313,20 @@ def test_position_sizes_clear_each_coins_minimum_order(conn, cfg, synthetic_mark
     born = [run._newcomer() for _ in range(100)]
     born += [run._offspring(born[:10]) for _ in range(100)]
     assert all(g.position_size_pct >= run.size_floors[g.pair] - 1e-3 for g in born)
+
+
+def test_carry_over_seeds_from_previous_run(conn, cfg, synthetic_market):
+    cfg = small_cfg(cfg)
+    cfg["evolution"]["carry_over_fraction"] = 0.25
+    first = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
+    assert first._carried_over(24) == []           # nothing to continue from yet
+    first.run()
+    saved = [row[0] for row in conn.execute(
+        "SELECT genome_json FROM population WHERE run_id=? ORDER BY rank LIMIT 6", (first.run_id,))]
+    second = EvolutionRun(conn, cfg, synthetic_market, "synthetic", log=lambda _: None)
+    carried = second._carried_over(24)
+    assert 1 <= len(carried) <= 6
+    assert [g.to_json() for g in carried] == saved[:len(carried)]
+    cfg["evolution"]["carry_over_fraction"] = 0
+    assert EvolutionRun(conn, cfg, synthetic_market, "synthetic",
+                        log=lambda _: None)._carried_over(24) == []

@@ -29,7 +29,9 @@ python -m bots.main fetch          # 3 years of 15m candles + Fear & Greed, ~2 m
 python -m bots.main import-csv XBTUSD_15.csv --pair BTC/USD --timeframe 15m
 python -m bots.main status
 
-# 2. Evolution (200 bots x 100 generations). Writes runs/<id>.md.
+# 2. Evolution (200 bots x 100 generations). Writes runs/<id>.md. Each run starts
+#    with evolution.carry_over_fraction of its bots taken from the previous run's
+#    best, so nightly runs continue one search instead of restarting from random.
 python -m bots.main evolve
 python -m bots.main evolve --synthetic   # random-walk data: pipeline check only
 

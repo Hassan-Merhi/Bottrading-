@@ -163,6 +163,34 @@ class EvolutionRun:
             g = make()
         return g
 
+    def _carried_over(self, size: int) -> list[Genome]:
+        """The best genomes of the most recent finished run, to continue its search.
+
+        Without this every run restarts from random bots and can only reuse the
+        graveyard; with it the search is cumulative across nightly runs. Only
+        genomes whose pair and timeframe are still in the market are kept, and
+        the share is capped so newcomers and offspring keep exploring.
+        """
+        share = float(self.ecfg.get("carry_over_fraction", 0) or 0)
+        if share <= 0:
+            return []
+        row = self.conn.execute(
+            "SELECT run_id FROM population ORDER BY rowid DESC LIMIT 1").fetchone()
+        if row is None:
+            return []
+        rows = self.conn.execute(
+            "SELECT genome_json FROM population WHERE run_id=? ORDER BY rank LIMIT ?",
+            (row[0], max(1, int(round(size * min(share, 0.9)))))).fetchall()
+        carried: list[Genome] = []
+        for (genome_json,) in rows:
+            try:
+                g = Genome.from_dict(json.loads(genome_json))
+            except (ValueError, TypeError, KeyError):
+                continue
+            if (g.pair, g.timeframe) in self.market and g not in carried:
+                carried.append(g)
+        return carried
+
     def _fill(self, population: list[Genome], target: int, make: Callable[[], Genome]) -> None:
         seen = set(population)
         attempts = 0
@@ -224,7 +252,9 @@ class EvolutionRun:
                                        initargs=(self.market, self.windows_ms, self.cfg,
                                                  self.ctx))
         try:
-            population: list[Genome] = []
+            population: list[Genome] = self._carried_over(size)
+            if population:
+                self.log(f"seeded {len(population)} bots from the previous run's final generation")
             self._fill(population, size, self._newcomer)
             bots: list[Bot] = []
             for gen in range(self.ecfg["generations"]):

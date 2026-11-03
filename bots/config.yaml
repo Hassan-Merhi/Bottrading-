@@ -82,6 +82,10 @@ evolution:
   elite_fraction: 0.15                   # top 10–20% survive and breed
   death_fraction: 0.5                    # bottom 50% die each generation
   newcomer_fraction: 0.10                # random newcomers each generation
+  # Start each run with this share of the population taken from the best bots of
+  # the previous run's final generation, so nightly runs continue one search
+  # instead of restarting from random bots. 0 = every run starts from scratch.
+  carry_over_fraction: 0.25
   mutation_rate: 0.3                     # per-gene probability of mutating
   mutation_scale: 0.10                   # ±10% on numeric genes
   # Maintain coverage across independent coin/strategy combinations without
