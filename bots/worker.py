@@ -271,6 +271,17 @@ class Worker:
                     price_source=self.trader.md)
         except Exception as e:  # noqa: BLE001
             print(f"Research paper league tick skipped: {e}", flush=True)
+        # Paper arena: evolved bots on fake money, same isolation as the league.
+        try:
+            from bots.paper.arena import tick as arena_tick
+            if feed["healthy"] and not feed["last_errors"] and report is not None and report.healthy:
+                out = arena_tick(self.conn, self.cfg, now_ms(), allow_entries=not bool(
+                    self.state.get("owner_pause") or self.state.get("entry_halt")),
+                    price_source=self.trader.md)
+                if out.get("retired"):
+                    print(f"Paper arena retired {out['retired']} bot(s) to the graveyard", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"Paper arena tick skipped: {e}", flush=True)
         # Arbitrage scanner + paper arbitrage: public order books only, fake money.
         # Its own failures never touch the trading loop or the risk guard.
         try:

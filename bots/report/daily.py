@@ -112,6 +112,12 @@ def daily_report_text(conn: sqlite3.Connection, now: int, cfg: dict | None = Non
             e["detail"] for e in s["risk_events"][-5:]))
     else:
         lines.append("Risk events today: none")
+    if cfg is not None and (cfg.get("paper_arena") or {}).get("enabled"):
+        try:
+            from bots.paper.arena import snapshot as arena_snapshot, text_summary as arena_text
+            lines.append(arena_text(arena_snapshot(conn, cfg, now)))
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"Paper arena: report unavailable ({e})")
     if cfg is not None and (cfg.get("arbitrage") or {}).get("enabled"):
         try:
             from bots.arb.report import snapshot as arb_snapshot, text_summary as arb_text

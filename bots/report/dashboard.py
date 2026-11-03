@@ -39,6 +39,8 @@ from bots.report.bots_view import bots_index, research_detail, standard_account_
 from bots.report.design import shell_page
 from bots.paper.league import snapshot as lab_snapshot
 from bots.arb.report import snapshot as arb_snapshot
+from bots.paper.arena import snapshot as arena_snapshot
+from bots.report.arena_view import arena_page
 from bots.report.arb_view import arbitrage_page
 from bots.paper.forward_history import forward_history
 from bots.report.forward_page import history_page, overview_panel
@@ -389,7 +391,31 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             s["research_league"] = lab_snapshot(conn, cfg)
             s["research"] = research_snapshot(conn, cfg)
             s["arbitrage"] = arb_snapshot(conn, cfg, now_ms(), env)
+            s["paper_arena"] = arena_snapshot(conn, cfg, now_ms())
             return JSONResponse(json.loads(json.dumps(s, default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/api/arena")
+    def arena_status():
+        """Read-only: evolved bots trading fake money forward, and what retired."""
+        conn = db()
+        try:
+            return JSONResponse(json.loads(json.dumps(arena_snapshot(conn, cfg, now_ms()), default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/arena", response_class=HTMLResponse)
+    def arena_view():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Paper arena", arena_page(arena_snapshot(conn, cfg, now)),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#bots", "Bots trading"), ("#retired", "Retired")],
+                        alive=data["worker_healthy"], current="arena")
         finally:
             conn.close()
 

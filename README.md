@@ -63,6 +63,17 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Paper arena (fake money, where evolution learns)
+
+The strict gates above mean almost no evolved bot ever reaches paper trading.
+The paper arena fixes that without touching the gates: after every evolution
+run its best diverse bots trade forward on real Kraken candles with `$20` of
+fake money each, up to `paper_arena.max_bots`. Clear losers are buried in the
+graveyard with the cause "lost money forward" so evolution avoids them; bots
+ahead after a few trades seed the next run's population. Nothing in the arena
+can reach real money. See `/arena` on the dashboard and
+[docs/paper-arena.md](docs/paper-arena.md).
+
 ## Arbitrage scanner (read-only, fake money)
 
 The worker also measures cross-venue arbitrage: it reads live order books on
