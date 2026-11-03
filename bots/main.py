@@ -226,6 +226,13 @@ def cmd_arb_report(cfg, conn, args) -> None:
         print(json.dumps(snap, indent=2, default=str))
 
 
+def cmd_hourly(cfg, conn, args) -> None:
+    """Print the hourly per-bot update (what Telegram receives each hour)."""
+    from bots.report.hourly import hourly_report_text
+    from bots.risk.state import now_ms
+    print(hourly_report_text(conn, cfg, now_ms()))
+
+
 def cmd_arb_live_status(cfg, conn, args) -> None:
     """Read-only: every reason live arbitrage would refuse to trade right now."""
     import json
@@ -337,6 +344,7 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--no-dashboard", action="store_true")
     sub.add_parser("dashboard", help="serve the dashboard only")
     sub.add_parser("report", help="print today's report")
+    sub.add_parser("hourly", help="print the hourly per-bot update")
     sub.add_parser("research", help="read-only Google News research and evolution feedback")
     bk = sub.add_parser("backup", help="back up the database")
     bk.add_argument("--send", action="store_true",
@@ -364,7 +372,7 @@ def main(argv: list[str] | None = None) -> None:
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
      "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "research": cmd_research,
      "watchdog": cmd_watchdog, "arb-scan": cmd_arb_scan, "arb-report": cmd_arb_report,
-     "arb-live-status": cmd_arb_live_status,
+     "arb-live-status": cmd_arb_live_status, "hourly": cmd_hourly,
      "confirm-live": cmd_confirm_live, "audit-live": cmd_audit_live}[args.cmd](cfg, conn, args)
 
 

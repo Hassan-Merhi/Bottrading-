@@ -311,6 +311,7 @@ worker:
 
 telegram:
   alert_throttle_minutes: 60
+  hourly_report: true                    # every hour: each bot, its coin, its money, what happened
 
 # ---------------------------------------------------------------------------
 # AI analyst: a daily news briefing sent to you. Information only; the trading
