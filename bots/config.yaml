@@ -173,6 +173,19 @@ research:
 research_league:
   enabled: true
   allocation_usd: 20
+# Paper arena: after every evolution run its best diverse bots trade fake money
+# on real prices, gate or no gate. Clear losers are buried in the graveyard so
+# evolution avoids them; bots ahead forward seed the next run. Never a path to
+# real money: the Phase 4/5 gates below are untouched.
+paper_arena:
+  enabled: true
+  max_bots: 20
+  allocation_usd: 20
+  max_pair_share: 0.3                  # at most 30% of new entrants on one coin ...
+  max_family_share: 0.3                # ... or one entry rule
+  retire_drawdown_pct: 25              # bury a bot this far under its peak
+  retire_min_trades: 10                # ... or under water after this many forward trades
+  winner_min_trades: 5                 # ahead after this many trades = seeds the next evolution
 
 # ---------------------------------------------------------------------------
 # Arbitrage scanner and paper arbitrage. Read-only against every exchange:

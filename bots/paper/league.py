@@ -92,26 +92,32 @@ def research_genomes() -> dict[str, Genome]:
     }
 
 
-def _series(conn: sqlite3.Connection, pair: str, now: int):
-    # Newest 1500 x 15-minute observations, never invented historical data.
+def _series(conn: sqlite3.Connection, pair: str, now: int, timeframe: str = "1h"):
+    """Closed candles of `timeframe` built from stored 15-minute observations.
+
+    Never invents history: too few candles, a gap in the recent window, or a
+    latest candle that is not yet closed (or is stale) all return None.
+    """
+    step = TIMEFRAME_MS[timeframe]
+    per = step // TIMEFRAME_MS["15m"]
     rows = conn.execute(
         "SELECT ts, open, high, low, close, volume FROM candles "
-        "WHERE pair=? AND timeframe='15m' AND ts + ? <= ? ORDER BY ts DESC LIMIT 1500",
-        (pair, TIMEFRAME_MS["15m"], now)).fetchall()
+        "WHERE pair=? AND timeframe='15m' AND ts + ? <= ? ORDER BY ts DESC LIMIT ?",
+        (pair, TIMEFRAME_MS["15m"], now, max(1500, 260 * per))).fetchall()
     if len(rows) < 250:
         return None
     df = pd.DataFrame([tuple(r) for r in reversed(rows)],
                       columns=["ts", "open", "high", "low", "close", "volume"])
     # Reject incomplete timestamps instead of treating a gapped bucket as executable.
-    one_hour = resample(df, "15m", "1h")
-    if len(one_hour) < 55:
+    bars = df if timeframe == "15m" else resample(df, "15m", timeframe)
+    if len(bars) < 55:
         return None
-    if not (one_hour.ts.diff().dropna().tail(70) == TIMEFRAME_MS["1h"]).all():
+    if not (bars.ts.diff().dropna().tail(70) == step).all():
         return None
-    latest = int(one_hour.ts.iloc[-1])
-    if now < latest + TIMEFRAME_MS["1h"] or now - (latest + TIMEFRAME_MS["1h"]) > 2 * TIMEFRAME_MS["1h"]:
+    latest = int(bars.ts.iloc[-1])
+    if now < latest + step or now - (latest + step) > 2 * step:
         return None
-    return series_from_df(pair, "1h", one_hour)
+    return series_from_df(pair, timeframe, bars)
 
 
 def _fill(conn, name, now, side, qty, price, fee, pnl, reason):
@@ -127,16 +133,27 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
     if not lab.get("enabled", False):
         return {"enabled": False, "processed": 0}
     now = int(now if now is not None else time.time() * 1000)
+    return tick_genomes(conn, cfg, research_genomes(), now, allow_entries, price_source,
+                        initial=max(5.0, float(lab.get("allocation_usd", 20))))
+
+
+def tick_genomes(conn: sqlite3.Connection, cfg: dict, genomes: dict[str, Genome], now: int,
+                 allow_entries: bool = True, price_source=None, initial: float = 20.0) -> dict:
+    """Forward paper-trade every genome on its own timeframe, one new closed candle at a time.
+
+    Shared by the fixed research league and the evolved paper arena. Fills are
+    simulated at the observed price with taker fee, spread and slippage; a quote
+    failure produces no fill, and missed candles are never replayed.
+    """
     ensure_schema(conn)
-    initial = max(5.0, float(lab.get("allocation_usd", 20)))
     fee = float(cfg["backtest"]["taker_fee_pct"]) / 100
     # Full configured spread is paid over a round trip, half on each leg.
     impact = float(cfg["backtest"]["slippage_pct"]) / 100 + float(cfg["backtest"]["spread_bps"]) / 20000
     if not all(math.isfinite(x) and 0 <= x < 0.1 for x in (fee, impact)):
         raise ValueError("invalid paper execution cost model")
     processed = 0
-    for name, genome in research_genomes().items():
-        s = _series(conn, genome.pair, now)
+    for name, genome in genomes.items():
+        s = _series(conn, genome.pair, now, genome.timeframe)
         if s is None:
             continue
         candle = int(s.ts[-1])
@@ -179,7 +196,7 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
                 closing_reason = "stop observed at close"
             elif mark_price >= target:
                 closing_reason = "target observed at close"
-            elif genome.max_hold_candles and entry_ts and now - entry_ts >= genome.max_hold_candles * TIMEFRAME_MS["1h"]:
+            elif genome.max_hold_candles and entry_ts and now - entry_ts >= genome.max_hold_candles * TIMEFRAME_MS[genome.timeframe]:
                 closing_reason = "time exit"
             elif bool(exit_[-1]):
                 closing_reason = "signal exit"
@@ -231,6 +248,18 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
     return {"enabled": True, "processed": processed}
 
 
+ARENA_PREFIX = "arena/"
+
+
+def account_rows(conn: sqlite3.Connection, arena: bool) -> list[dict]:
+    """Research-league accounts (arena=False) or paper-arena accounts (arena=True)."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lab_accounts'").fetchone():
+        return []
+    op = "LIKE" if arena else "NOT LIKE"
+    return [dict(r) for r in conn.execute(
+        f"SELECT * FROM lab_accounts WHERE name {op} ? ORDER BY name", (ARENA_PREFIX + "%",))]
+
+
 def snapshot(conn: sqlite3.Connection, cfg: dict) -> dict:
     if not (cfg.get("research_league") or {}).get("enabled", False):
         return {"enabled": False, "bots": [], "pnl": 0, "real_money": False}
@@ -239,8 +268,7 @@ def snapshot(conn: sqlite3.Connection, cfg: dict) -> dict:
         return {"enabled": True, "bots": [], "pnl": 0, "real_money": False}
     initial = float((cfg.get("research_league") or {}).get("allocation_usd", 20))
     bots = []
-    for row in conn.execute("SELECT * FROM lab_accounts ORDER BY name"):
-        r = dict(row)
+    for r in account_rows(conn, arena=False):
         pnl = r["last_equity"] - initial
         bots.append({"name": r["name"], "pair": r["pair"], "equity": r["last_equity"],
                      "pnl": pnl, "return_pct": 100 * pnl / initial,

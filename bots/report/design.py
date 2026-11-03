@@ -567,6 +567,7 @@ def shell_page(title: str, body: str, mode: str, heartbeat: str,
         "advanced": "Technical overview",
         "graveyard": "Failed strategies",
         "arbitrage": "Arbitrage",
+        "arena": "Paper arena",
     }.get(current, "Trading dashboard")
     links = "".join(
         '<a href="' + escape(href, quote=True) + '"' +

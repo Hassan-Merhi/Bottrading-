@@ -120,6 +120,10 @@ def cmd_evolve(cfg, conn, args) -> None:
         first = min(int(sr.ts[0]) for sr in market.values())
         ctx = build_context(market, synthetic_fear_greed(first, 2 * 366))
     result = EvolutionRun(conn, cfg, market, label, ctx=ctx).run()
+    if not args.synthetic:
+        from bots.paper.arena import refresh_from_run
+        added = refresh_from_run(conn, cfg, result.run_id)
+        print(f"Paper arena: {added}")
     report = render(result, conn)
     out = resolve_path("runs") / f"{result.run_id}.md"
     out.parent.mkdir(exist_ok=True)

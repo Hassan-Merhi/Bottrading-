@@ -174,15 +174,27 @@ class EvolutionRun:
         share = float(self.ecfg.get("carry_over_fraction", 0) or 0)
         if share <= 0:
             return []
+        budget = max(1, int(round(size * min(share, 0.9))))
+        carried: list[Genome] = []
+        # Bots that are making money forward in the paper arena come first: real
+        # prices have said something about them that no backtest can.
+        try:
+            from bots.paper.arena import forward_winners
+            for g in forward_winners(self.conn, self.cfg)[:budget]:
+                if (g.pair, g.timeframe) in self.market and g not in carried:
+                    carried.append(g)
+        except Exception:  # noqa: BLE001 - the arena is optional
+            pass
         row = self.conn.execute(
             "SELECT run_id FROM population ORDER BY rowid DESC LIMIT 1").fetchone()
         if row is None:
-            return []
+            return carried
         rows = self.conn.execute(
             "SELECT genome_json FROM population WHERE run_id=? ORDER BY rank LIMIT ?",
-            (row[0], max(1, int(round(size * min(share, 0.9)))))).fetchall()
-        carried: list[Genome] = []
+            (row[0], budget)).fetchall()
         for (genome_json,) in rows:
+            if len(carried) >= budget:
+                break
             try:
                 g = Genome.from_dict(json.loads(genome_json))
             except (ValueError, TypeError, KeyError):
