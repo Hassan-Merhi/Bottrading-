@@ -222,6 +222,16 @@ def cmd_arb_report(cfg, conn, args) -> None:
         print(json.dumps(snap, indent=2, default=str))
 
 
+def cmd_arb_live_status(cfg, conn, args) -> None:
+    """Read-only: every reason live arbitrage would refuse to trade right now."""
+    import json
+    from bots.arb.live import snapshot
+    from bots.risk.state import now_ms
+
+    print(json.dumps(snapshot(conn, cfg, dict(os.environ), now_ms(), clients_ready=False),
+                     indent=2, default=str))
+
+
 def cmd_backup(cfg, conn, args) -> None:
     from bots.worker import backup_database, send_offsite_backup
 
@@ -333,6 +343,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("arb-scan", help="one read-only arbitrage scan of public order books")
     ar = sub.add_parser("arb-report", help="what the arbitrage scanner has seen so far")
     ar.add_argument("--json", action="store_true")
+    sub.add_parser("arb-live-status", help="why live arbitrage is or is not allowed right now")
     audit = sub.add_parser("audit-live", help="read-only verification of live Kraken orders")
     audit.add_argument("--acknowledge", action="store_true",
                        help="clear reconciliation lock only after a successful authenticated audit")
@@ -349,6 +360,7 @@ def main(argv: list[str] | None = None) -> None:
      "status": cmd_status, "evolve": cmd_evolve, "run": cmd_run, "dashboard": cmd_dashboard,
      "report": cmd_report, "backup": cmd_backup, "digest": cmd_digest, "research": cmd_research,
      "watchdog": cmd_watchdog, "arb-scan": cmd_arb_scan, "arb-report": cmd_arb_report,
+     "arb-live-status": cmd_arb_live_status,
      "confirm-live": cmd_confirm_live, "audit-live": cmd_audit_live}[args.cmd](cfg, conn, args)
 
 

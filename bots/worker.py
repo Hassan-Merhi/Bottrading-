@@ -165,6 +165,7 @@ class Worker:
         self._market_refresh_at = 0.0
         self._arb_venues: dict | None = None
         self._arb_futures = None
+        self._arb_live_clients: dict | None = None
 
     # -- startup / shutdown ------------------------------------------------
 
@@ -310,17 +311,48 @@ class Worker:
                 f"{k}: {v}" for k, v in result["errors"].items()), flush=True)
         arb_paper_tick(self.conn, self.cfg, result.get("edges") or [], now,
                        allow_entries=not bool(self.state.get("owner_pause")))
+        self._arbitrage_live(result.get("edges") or [], now)
+
+    def _arbitrage_live(self, edges: list, now: int) -> None:
+        """Real-money arbitrage, if and only if every gate in bots.arb.live passes."""
+        from bots.arb import live as arb_live
+
+        lcfg = (self.cfg.get("arbitrage") or {}).get("live") or {}
+        if not lcfg.get("enabled") or str(self.env.get("MODE", "")).upper() != "LIVE":
+            return
+        if self._arb_live_clients is None:
+            try:
+                self._arb_live_clients = arb_live.make_live_venues(self.cfg["arbitrage"], self.env)
+                self.alerter.alert("Live arbitrage connections verified for: "
+                                   + ", ".join(sorted(self._arb_live_clients)), kind="info")
+            except Exception as e:  # noqa: BLE001 - no keys or a key that can withdraw: stay locked
+                self._arb_live_clients = {}
+                self.state.log("arb_live_locked", str(e)[:200])
+                self.alerter.alert(f"Live arbitrage stays locked: {e}", kind="critical")
+        out = arb_live.tick(self.conn, self.cfg, self.env, self.state, self._arb_live_clients,
+                            edges, now, alerter=self.alerter)
+        if out.get("attempted"):
+            print(f"live arbitrage: {out}", flush=True)
 
     HELP = ("Commands:\n/status - today's numbers\n/bots - every running bot\n"
             "/digest - this morning's briefing\n/pause - stop opening new trades "
             "(exits and stops keep working)\n/resume - allow new trades again\n"
             "/kill confirm - close every live position, cancel orders, lock live mode\n"
-            "/evolve - start an evolution run now (one at a time)")
+            "/evolve - start an evolution run now (one at a time)\n"
+            "/arbresume confirm - clear a live arbitrage halt after reconciling both venues")
 
     def _command(self, text: str) -> str:
         parts = text.strip().split()
         cmd = parts[0].lower() if parts else ""
         arg = " ".join(parts[1:]).lower()
+        if cmd == "/arbresume":
+            from bots.arb.live import ARB_LIVE_HALT
+            if arg != "confirm":
+                return (f"Arbitrage halt: {self.state.get(ARB_LIVE_HALT) or 'none'}. Reconcile both "
+                        "venues first, then send /arbresume confirm.")
+            self.state.clear(ARB_LIVE_HALT)
+            self.state.log("arb_live_resume", "owner cleared the arbitrage halt")
+            return "Arbitrage halt cleared. Live arbitrage will resume when every gate passes."
         if cmd in ("/status", "/report"):
             return daily_report_text(self.conn, now_ms())
         if cmd == "/digest":

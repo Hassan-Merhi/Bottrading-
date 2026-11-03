@@ -1,6 +1,7 @@
 """Read-only summaries of what the arbitrage scanner and paper trader have seen."""
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 
@@ -12,15 +13,19 @@ def _has(conn: sqlite3.Connection, table: str) -> bool:
                         (table,)).fetchone() is not None
 
 
-def snapshot(conn: sqlite3.Connection, cfg: dict, now: int | None = None) -> dict:
+def snapshot(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
+             env: dict | None = None) -> dict:
     acfg = cfg.get("arbitrage") or {}
     now = int(now if now is not None else time.time() * 1000)
+    env = env if env is not None else dict(os.environ)
     base = {"enabled": bool(acfg.get("enabled", False)), "real_money": False, "simulation": True,
             "size_usd": float(acfg.get("size_usd", 20)),
             "min_net_edge_pct": float(acfg.get("min_net_edge_pct", 0.10)),
             "venues": {n: {"taker_fee_pct": v.get("taker_fee_pct"), "quote": v.get("quote", "USD"),
                            "enabled": v.get("enabled", True)}
                        for n, v in (acfg.get("venues") or {}).items()}}
+    from bots.arb.live import snapshot as live_snapshot
+    base["live"] = live_snapshot(conn, cfg, env, now, clients_ready=False)
     if not base["enabled"] or not _has(conn, "arb_observations"):
         return {**base, "observations": 0, "pairs": [], "paper": None, "funding": [],
                 "scan_errors": []}
@@ -91,6 +96,12 @@ def text_summary(snap: dict) -> str:
     if p:
         lines.append(f"Paper arbitrage: {p['trades']} trades, realized ${p['realized_net_usd']:+.2f}, "
                      f"versus holding ${p['arbitrage_pnl']:+.2f}.")
+    live = snap.get("live") or {}
+    if live.get("enabled"):
+        lines.append(f"LIVE arbitrage: {'READY' if live.get('ready') else 'locked'}; "
+                     f"{live.get('trades', 0)} real trades, net ${live.get('net_usd', 0):+.2f}"
+                     + (f"; first blocker: {live['blockers'][0]}" if live.get("blockers") else "")
+                     + (f"; HALTED: {live['halt']}" if live.get("halt") else ""))
     for f in snap.get("funding") or []:
         lines.append(f"Funding {f['symbol']}: {100 * f['rate']:+.4f}%/{f['interval_hours']:.0f}h, "
                      f"{100 * f['annual_gross_pct']:+.1f}%/yr gross, "
