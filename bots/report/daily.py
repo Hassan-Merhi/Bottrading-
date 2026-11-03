@@ -112,6 +112,12 @@ def daily_report_text(conn: sqlite3.Connection, now: int, cfg: dict | None = Non
             e["detail"] for e in s["risk_events"][-5:]))
     else:
         lines.append("Risk events today: none")
+    if cfg is not None and (cfg.get("arbitrage") or {}).get("enabled"):
+        try:
+            from bots.arb.report import snapshot as arb_snapshot, text_summary as arb_text
+            lines.append(arb_text(arb_snapshot(conn, cfg, now)))
+        except Exception as e:  # noqa: BLE001 - the report must still go out
+            lines.append(f"Arbitrage scanner: report unavailable ({e})")
     if s["mode"] == "LIVE":
         lines.append("Live trading can lose real money up to your configured caps.")
     return "\n".join(lines)

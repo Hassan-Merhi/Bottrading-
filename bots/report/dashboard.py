@@ -38,6 +38,8 @@ from bots.report.performance_view import performance_page
 from bots.report.bots_view import bots_index, research_detail, standard_account_detail
 from bots.report.design import shell_page
 from bots.paper.league import snapshot as lab_snapshot
+from bots.arb.report import snapshot as arb_snapshot
+from bots.report.arb_view import arbitrage_page
 from bots.paper.forward_history import forward_history
 from bots.report.forward_page import history_page, overview_panel
 from bots.research.agent import snapshot as research_snapshot
@@ -386,7 +388,33 @@ def create_app(db_path: str | Path, cfg: dict, env: dict | None = None) -> FastA
             s["scaling"] = scale_review(conn, cfg, now_ms())
             s["research_league"] = lab_snapshot(conn, cfg)
             s["research"] = research_snapshot(conn, cfg)
+            s["arbitrage"] = arb_snapshot(conn, cfg, now_ms())
             return JSONResponse(json.loads(json.dumps(s, default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/api/arbitrage")
+    def arbitrage_status():
+        """Read-only: observed cross-venue edges, paper arbitrage, funding carry."""
+        conn = db()
+        try:
+            return JSONResponse(json.loads(json.dumps(arb_snapshot(conn, cfg, now_ms()),
+                                                      default=str)))
+        finally:
+            conn.close()
+
+    @app.get("/arbitrage", response_class=HTMLResponse)
+    def arbitrage_view():
+        conn = db()
+        try:
+            now = now_ms()
+            hb = RiskState(conn).get(HEARTBEAT)
+            data = safety_snapshot(conn, cfg, now, bool(env.get("DASHBOARD_TOKEN")))
+            return page("Arbitrage", arbitrage_page(arb_snapshot(conn, cfg, now), now),
+                        data["mode"], f"last trading loop {_ago(hb, now)}",
+                        tabs=[("#edges", "Price gaps"), ("#paper", "Paper trades"),
+                              ("#funding", "Funding carry")],
+                        alive=data["worker_healthy"], current="arbitrage")
         finally:
             conn.close()
 

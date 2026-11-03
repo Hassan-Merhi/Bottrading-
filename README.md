@@ -63,6 +63,17 @@ The worker, every `worker.poll_seconds`:
 Other commands: `report`, `digest`, `fetch-mood`, `backup`, `watchdog` (run it
 from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`.
 
+## Arbitrage scanner (read-only, fake money)
+
+The worker also measures cross-venue arbitrage: it reads live order books on
+Kraken and Coinbase, walks them for a `$20` order and records the net result
+after both taker fees and slippage, every two minutes. A paper account with
+cash and coin pre-positioned on both venues takes the trade when the net edge
+clears `arbitrage.min_net_edge_pct`. Funding-rate carry on Kraken Futures is
+reported the same way. Nothing is ever ordered. See `/arbitrage` on the
+dashboard, `python -m bots.main arb-scan`, and [docs/arbitrage.md](docs/arbitrage.md),
+which also shows why the break-even gap at Tier 1 fees is about 1.5%.
+
 ## Phase 8: evaluate real profits before any manual scaling
 
 Phase 8 adds an independent **read-only** real-money performance review.
