@@ -22,7 +22,14 @@ def make_series(open_, high, low, close, timeframe="1h", start_ms=1_700_000_000_
 
 @pytest.fixture
 def cfg():
-    return copy.deepcopy(load_config())
+    c = copy.deepcopy(load_config())
+    # The risk, paper, pilot and dashboard suites were written around $20 paper
+    # accounts (orders of 10% = $2 are refused, 60% drawdowns on $20, ...). They
+    # test the rules, not the production default, so pin the size they assume.
+    c["paper"]["allocation_usd"] = 20
+    c["research_league"]["allocation_usd"] = 20
+    c["backtest"]["starting_balance_usd"] = 20
+    return c
 
 
 @pytest.fixture

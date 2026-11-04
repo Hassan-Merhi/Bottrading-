@@ -22,6 +22,9 @@ def cfg(**over):
     return c
 
 
+ALLOC = float(load_config()["paper_arena"]["allocation_usd"])
+
+
 def fake_run(conn, run_id="run-a", n=12):
     """A saved final generation: n distinct genomes across pairs and entry types."""
     pairs = ["BTC/USD", "ETH/USD", "SOL/USD"]
@@ -68,7 +71,7 @@ def test_arena_trades_forward_and_stays_out_of_real_money_tables():
     for table in ("deployed_bots", "accounts", "candidates"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     snap = arena.snapshot(conn, cfg(), NOW + HOUR)
-    assert snap["active"] == 3 and snap["real_money"] is False and snap["capital"] == 60
+    assert snap["active"] == 3 and snap["real_money"] is False and snap["capital"] == 3 * ALLOC
     assert "Paper arena (fake money): 3 bots trading" in arena.text_summary(snap)
 
 
@@ -80,9 +83,9 @@ def test_losers_are_buried_and_winners_seed_evolution():
     arena.tick(conn, cfg(), NOW)
     names = [b["name"] for b in arena.active(conn)]
     # Fake forward results straight into the shared paper accounts.
-    conn.execute("UPDATE lab_accounts SET last_equity=14, max_drawdown=0.30 WHERE name=?", (names[0],))
-    conn.execute("UPDATE lab_accounts SET last_equity=18, closed_trades=12 WHERE name=?", (names[1],))
-    conn.execute("UPDATE lab_accounts SET last_equity=20.03, closed_trades=6, wins=4 WHERE name=?", (names[2],))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, max_drawdown=0.30 WHERE name=?", (0.7 * ALLOC, names[0]))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, closed_trades=12 WHERE name=?", (0.9 * ALLOC, names[1]))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, closed_trades=6, wins=4 WHERE name=?", (ALLOC + 0.03, names[2]))
     conn.commit()
     retired = arena.retire_losers(conn, cfg(), NOW + HOUR)
     assert retired == 2
@@ -113,7 +116,7 @@ def test_evolution_seeds_from_forward_winners(synthetic_market):
     league.ensure_schema(conn)
     conn.execute("INSERT INTO lab_accounts(name,pair,genome_json,cash,peak_equity,last_equity,hold_start_price,"
                  "last_candle_ts,started_ms,closed_trades) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                 (ARENA_PREFIX + "w", "ETH/USD", winner.to_json(), 21, 21, 21, 100, NOW, NOW, 8))
+                 (ARENA_PREFIX + "w", "ETH/USD", winner.to_json(), ALLOC + 1, ALLOC + 1, ALLOC + 1, 100, NOW, NOW, 8))
     conn.commit()
     run = EvolutionRun(conn, c, synthetic_market, "synthetic", log=lambda _: None)
     carried = run._carried_over(24)

@@ -22,7 +22,7 @@ arena is where bots practise.
    retired is never re-admitted.
 2. **Trading.** Every worker loop, each arena bot looks at the latest closed
    Kraken candle of its own timeframe (15m, 1h or 4h) and acts on its signals
-   with `allocation_usd` (default $20) of fake money. Fills are simulated at
+   with `allocation_usd` (default $100) of fake money. Fills are simulated at
    the observed price with the taker fee, spread and slippage; no intrabar
    best-case fills; missed candles are never replayed. This is the same
    simulation the research league uses.
@@ -68,7 +68,7 @@ winners, evolve again.
 paper_arena:
   enabled: true
   max_bots: 20
-  allocation_usd: 20
+  allocation_usd: 100
   max_pair_share: 0.3
   max_family_share: 0.3
   retire_drawdown_pct: 25
