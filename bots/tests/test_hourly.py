@@ -4,7 +4,7 @@ from __future__ import annotations
 from bots.db import connect
 from bots.paper import arena, league
 from bots.report.hourly import chunks, hourly_report_text
-from bots.tests.test_arena import NOW, HOUR, cfg, fake_run
+from bots.tests.test_arena import ALLOC, NOW, HOUR, cfg, fake_run
 from bots.tests.test_research_league import seed_candles
 
 
@@ -16,12 +16,12 @@ def test_hourly_report_lists_bots_trades_deaths_and_events():
     seed_candles(conn, NOW - 2 * HOUR)
     arena.tick(conn, c, NOW - 2 * HOUR)
     names = [b["name"] for b in arena.active(conn)]
-    conn.execute("UPDATE lab_marks SET equity=20.00")
-    conn.execute("UPDATE lab_accounts SET last_equity=20.37, closed_trades=1, wins=1 WHERE name=?", (names[0],))
+    conn.execute("UPDATE lab_marks SET equity=?", (ALLOC,))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, closed_trades=1, wins=1 WHERE name=?", (ALLOC + 0.37, names[0]))
     conn.execute("INSERT INTO lab_fills(name,ts,side,qty,price,fee,pnl,reason) VALUES(?,?,?,?,?,?,?,?)",
                  (names[0], NOW - 600_000, "sell", 0.0004, 50_000, 0.16, 0.37, "target observed at close"))
-    conn.execute("UPDATE lab_accounts SET last_equity=14, max_drawdown=0.3 WHERE name=?", (names[1],))
-    conn.execute("UPDATE lab_accounts SET last_equity=20, qty=0.0004 WHERE name=?", (names[2],))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, max_drawdown=0.3 WHERE name=?", (0.7 * ALLOC, names[1]))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, qty=0.0004 WHERE name=?", (ALLOC, names[2]))
     conn.commit()
     assert arena.retire_losers(conn, c, NOW - 300_000) == 1
     conn.execute("INSERT INTO risk_events(ts,kind,detail) VALUES(?,?,?)",
@@ -58,7 +58,7 @@ def test_retired_bots_drop_out_after_an_hour():
     seed_candles(conn, NOW - 5 * HOUR)
     arena.tick(conn, c, NOW - 5 * HOUR)
     names = [b["name"] for b in arena.active(conn)]
-    conn.execute("UPDATE lab_accounts SET last_equity=10, max_drawdown=0.5 WHERE name=?", (names[0],))
+    conn.execute("UPDATE lab_accounts SET last_equity=?, max_drawdown=0.5 WHERE name=?", (0.5 * ALLOC, names[0]))
     conn.commit()
     arena.retire_losers(conn, c, NOW - 3 * HOUR)
     text = hourly_report_text(conn, c, NOW)

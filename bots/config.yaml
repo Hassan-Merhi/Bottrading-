@@ -33,7 +33,7 @@ backtest:
   maker_fee_pct: 0.40                    # Tier 1 maker rate; paid by resting limit entries
   slippage_pct: 0.05                     # per market fill, on top of assumed half spread
   spread_bps: 10                         # conservative full bid/ask spread assumption, 10 bps
-  starting_balance_usd: 20               # matches max_per_bot_usd so sims face real minimums
+  starting_balance_usd: 100              # same fake money each paper bot trades, so sims face the same minimums
   # Kraken minimum order sizes for the backtest. Deliberately on the strict
   # side; live trading takes the larger of these and the exchange's own limits.
   min_order:
@@ -172,7 +172,7 @@ research:
   hour_utc: 6
 research_league:
   enabled: true
-  allocation_usd: 20
+  allocation_usd: 100
 # Paper arena: after every evolution run its best diverse bots trade fake money
 # on real prices, gate or no gate. Clear losers are buried in the graveyard so
 # evolution avoids them; bots ahead forward seed the next run. Never a path to
@@ -180,7 +180,7 @@ research_league:
 paper_arena:
   enabled: true
   max_bots: 20
-  allocation_usd: 20
+  allocation_usd: 100
   max_pair_share: 0.3                  # at most 30% of new entrants on one coin ...
   max_family_share: 0.3                # ... or one entry rule
   retire_drawdown_pct: 25              # bury a bot this far under its peak
@@ -290,7 +290,7 @@ risk:
 # Paper trading (section 5, step 3) and the always-on worker
 # ---------------------------------------------------------------------------
 paper:
-  allocation_usd: 20                     # fake money per paper bot
+  allocation_usd: 100                    # fake money per paper bot
   max_bots: 10                           # paper bots running at once
   max_per_pair: 3                        # diversity: slots per coin ...
   max_per_entry_type: 3                  # ... and per entry rule

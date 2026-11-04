@@ -71,7 +71,7 @@ from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`
 
 The strict gates above mean almost no evolved bot ever reaches paper trading.
 The paper arena fixes that without touching the gates: after every evolution
-run its best diverse bots trade forward on real Kraken candles with `$20` of
+run its best diverse bots trade forward on real Kraken candles with `$100` of
 fake money each, up to `paper_arena.max_bots`. Clear losers are buried in the
 graveyard with the cause "lost money forward" so evolution avoids them; bots
 ahead after a few trades seed the next run's population. Nothing in the arena
@@ -386,11 +386,11 @@ no disk. Leave the Kraken keys unset while paper trading.
   (`execution.entry_order: market`) and every exit is a market order, so a
   round trip costs about 1.8% with spread and slippage. That is why most
   strategies die, and why evolution only searches stops of 1.5%+, targets of
-  3%+ and positions of 30%+ of the allocation, and favours 1h/4h candles over
+  3%+ and positions of 10%+ of the allocation, and favours 1h/4h candles over
   15m (`SEARCH_FLOORS` and `TIMEFRAME_WEIGHTS` in `bots/strategy/genome.py`).
-  Each coin also gets its own position-size floor, so a $20 bot's order clears
+  Each coin also gets its own position-size floor, so a $100 bot's order clears
   that coin's `min_order` (quantity x the highest price before the test period,
-  plus 25% headroom): about 80% for BTC and ADA, 60% for ETH and DOGE. Without
+  plus 25% headroom): about 16% for BTC and ADA, 12% for ETH and DOGE. Without
   it, bots that trade in training get every order refused once the coin is
   more expensive (`min_order_size_floors` in `bots/evolution/runner.py`).
 - Limit entries (`execution.entry_order: limit`) rest at the bid for the
@@ -404,5 +404,6 @@ no disk. Leave the Kraken keys unset while paper trading.
   of the config value and Kraken's reported minimum.
 - The pair whitelist is BTC, ETH, SOL, XRP, LINK, ADA and DOGE against USD.
   Adding a pair later is safe: the worker downloads only the missing history.
-- `starting_balance_usd` / `paper.allocation_usd` are $20 (the live per-bot
-  cap), so tiny positions get refused just like on the exchange.
+- `starting_balance_usd` and every fake-money `allocation_usd` are $100, so the
+  simulation, the arena and the paper slots all face the same exchange minimums.
+  The real-money per-bot cap (`risk.max_per_bot_usd`) is a separate setting.

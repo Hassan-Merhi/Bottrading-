@@ -48,9 +48,10 @@ CATEGORICAL_GENES: dict[str, tuple[str, ...]] = {
 # Where evolution searches. Narrower than NUMERIC_GENES, which stays wide so stored
 # genomes load unchanged. A round trip costs about 1.8% at Kraken's Tier 1 taker
 # fee plus spread and slippage, so targets under ~3% or stops under ~1.5% lose
-# by construction; and below ~30% of a $20 allocation an order misses the $5
-# exchange minimum after the first small loss.
-SEARCH_FLOORS = {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "position_size_pct": 30.0}
+# by construction; and below ~10% of a $100 allocation an order misses the $5
+# exchange minimum after a few small losses (each coin's own floor from the
+# exchange minimum is applied on top, see runner.min_order_size_floors).
+SEARCH_FLOORS = {"stop_loss_pct": 1.5, "take_profit_pct": 3.0, "position_size_pct": 10.0}
 # Newcomers and timeframe mutations favour slower candles, where moves are large
 # enough to clear fees. 15m stays possible, just rarer.
 TIMEFRAME_WEIGHTS = {"15m": 1.0, "1h": 3.0, "4h": 2.0}
