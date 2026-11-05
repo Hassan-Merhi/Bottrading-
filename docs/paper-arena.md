@@ -17,7 +17,7 @@ arena is where bots practise.
 
 1. **Admission.** When an evolution run finishes, its final generation is
    ranked and the best bots fill the free arena slots (`paper_arena.max_bots`,
-   default 20), capped per coin and per entry rule so twenty SOL EMA crosses
+   default 40), capped per coin and per entry rule so twenty SOL EMA crosses
    do not crowd out everything else. A genome enters the arena once; one that
    retired is never re-admitted.
 2. **Trading.** Every worker loop, each arena bot looks at the latest closed
@@ -67,7 +67,7 @@ winners, evolve again.
 ```yaml
 paper_arena:
   enabled: true
-  max_bots: 20
+  max_bots: 40
   allocation_usd: 100
   max_pair_share: 0.3
   max_family_share: 0.3
