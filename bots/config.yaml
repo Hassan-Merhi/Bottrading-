@@ -179,7 +179,7 @@ research_league:
 # real money: the Phase 4/5 gates below are untouched.
 paper_arena:
   enabled: true
-  max_bots: 20
+  max_bots: 40
   allocation_usd: 100
   max_pair_share: 0.3                  # at most 30% of new entrants on one coin ...
   max_family_share: 0.3                # ... or one entry rule

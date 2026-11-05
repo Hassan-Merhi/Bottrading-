@@ -72,7 +72,7 @@ from an external scheduler to catch a dead machine), `dashboard`, `confirm-live`
 The strict gates above mean almost no evolved bot ever reaches paper trading.
 The paper arena fixes that without touching the gates: after every evolution
 run its best diverse bots trade forward on real Kraken candles with `$100` of
-fake money each, up to `paper_arena.max_bots`. Clear losers are buried in the
+fake money each, up to `paper_arena.max_bots` (40). Clear losers are buried in the
 graveyard with the cause "lost money forward" so evolution avoids them; bots
 ahead after a few trades seed the next run's population. Nothing in the arena
 can reach real money. See `/arena` on the dashboard and
