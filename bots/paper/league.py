@@ -16,7 +16,10 @@ import pandas as pd
 
 from bots.data.fetch import TIMEFRAME_MS
 from bots.data.loader import resample, series_from_df
-from bots.strategy.genome import Genome
+from bots.data.mood import DAY_MS, load_fear_greed
+from bots.data.store import load_candles
+from bots.strategy.context import MarketContext
+from bots.strategy.genome import NUMERIC_GENES, Genome
 from bots.strategy.signals import compute_signals, stop_pct_now
 
 SCHEMA = """
@@ -151,12 +154,17 @@ def tick_genomes(conn: sqlite3.Connection, cfg: dict, genomes: dict[str, Genome]
     impact = float(cfg["backtest"]["slippage_pct"]) / 100 + float(cfg["backtest"]["spread_bps"]) / 20000
     if not all(math.isfinite(x) and 0 <= x < 0.1 for x in (fee, impact)):
         raise ValueError("invalid paper execution cost model")
+    ctx = MarketContext(fear_greed=load_fear_greed(conn)
+                        if any(g.mood_filter_on for g in genomes.values()) else None)
     processed = 0
     for name, genome in genomes.items():
         s = _series(conn, genome.pair, now, genome.timeframe)
         if s is None:
             continue
         candle = int(s.ts[-1])
+        row = conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone()
+        if row is not None and candle <= row["last_candle_ts"]:
+            continue
         # An actual observed ticker is the forward execution reference in production;
         # historical closed-candle values are only used to calculate signals.
         try:
@@ -167,7 +175,6 @@ def tick_genomes(conn: sqlite3.Connection, cfg: dict, genomes: dict[str, Genome]
         if not math.isfinite(mark_price) or mark_price <= 0:
             continue
         quote_source = "kraken_ticker" if price_source is not None else "closed_candle_simulator"
-        row = conn.execute("SELECT * FROM lab_accounts WHERE name=?", (name,)).fetchone()
         if row is None:
             # Begin now with no retroactive signals/fills or fabricated observed days.
             conn.execute("INSERT INTO lab_accounts("
@@ -182,14 +189,20 @@ def tick_genomes(conn: sqlite3.Connection, cfg: dict, genomes: dict[str, Genome]
                 (name, candle, initial, mark_price, now, quote_source))
             conn.commit()
             continue
-        if candle <= row["last_candle_ts"]:
-            continue
         cash, qty = float(row["cash"]), float(row["qty"])
         entry_cost, entry_price, entry_ts = row["entry_cost"], row["entry_price"], row["entry_ts"]
         stop, target = row["stop_price"], row["target_price"]
         total_fees, trades, wins = float(row["fees"]), int(row["closed_trades"]), int(row["wins"])
         peak, drawdown = float(row["peak_equity"]), float(row["max_drawdown"])
-        entry, exit_ = compute_signals(s, genome)
+        if genome.trend_filter != "none":
+            ref_pair = genome.pair if genome.trend_filter == "own_daily" else "BTC/USD"
+            if ref_pair not in ctx.daily:
+                # Keep enough completed daily bars even if the signal candle closed yesterday.
+                end = now // DAY_MS * DAY_MS
+                lookback = int(NUMERIC_GENES["trend_period"][1]) + 1
+                bars = load_candles(conn, ref_pair, "15m", end - lookback * DAY_MS, end)
+                ctx.daily[ref_pair] = series_from_df(ref_pair, "1d", resample(bars, "15m", "1d"))
+        entry, exit_ = compute_signals(s, genome, ctx)
         closing_reason = None
         if qty > 0:
             if mark_price <= stop:
@@ -251,13 +264,15 @@ def tick_genomes(conn: sqlite3.Connection, cfg: dict, genomes: dict[str, Genome]
 ARENA_PREFIX = "arena/"
 
 
-def account_rows(conn: sqlite3.Connection, arena: bool) -> list[dict]:
-    """Research-league accounts (arena=False) or paper-arena accounts (arena=True)."""
+def account_rows(conn: sqlite3.Connection, arena: bool | None = None) -> list[dict]:
+    """Read paper accounts with their original allocation from the opening equity mark."""
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lab_accounts'").fetchone():
         return []
-    op = "LIKE" if arena else "NOT LIKE"
     return [dict(r) for r in conn.execute(
-        f"SELECT * FROM lab_accounts WHERE name {op} ? ORDER BY name", (ARENA_PREFIX + "%",))]
+        "SELECT a.*, (SELECT m.equity FROM lab_marks m WHERE m.name=a.name "
+        "ORDER BY m.candle_ts LIMIT 1) AS initial_equity FROM lab_accounts a "
+        "WHERE ? IS NULL OR (a.name LIKE ?) = ? ORDER BY a.name",
+        (arena, ARENA_PREFIX + "%", arena))]
 
 
 def snapshot(conn: sqlite3.Connection, cfg: dict) -> dict:
@@ -266,18 +281,20 @@ def snapshot(conn: sqlite3.Connection, cfg: dict) -> dict:
     # If deployment has not initialized the research DB yet, don't show a crash.
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lab_accounts'").fetchone():
         return {"enabled": True, "bots": [], "pnl": 0, "real_money": False}
-    initial = float((cfg.get("research_league") or {}).get("allocation_usd", 20))
+    allocation = max(5.0, float((cfg.get("research_league") or {}).get("allocation_usd", 20)))
     bots = []
     for r in account_rows(conn, arena=False):
+        initial = r["initial_equity"] or allocation
         pnl = r["last_equity"] - initial
         bots.append({"name": r["name"], "pair": r["pair"], "equity": r["last_equity"],
+                     "initial_equity": initial,
                      "pnl": pnl, "return_pct": 100 * pnl / initial,
                      "fees": r["fees"], "trades": r["closed_trades"], "wins": r["wins"],
                      "max_drawdown_pct": 100 * r["max_drawdown"],
                      "in_position": r["qty"] > 0, "started_ms": r["started_ms"],
                      "last_candle_ms": r["last_candle_ts"]})
     return {"enabled": True, "real_money": False, "simulation": True,
-            "allocation_usd": initial, "bots": bots,
-            "capital": initial * len(bots), "pnl": sum(b["pnl"] for b in bots),
+            "allocation_usd": allocation, "bots": bots,
+            "capital": sum(b["initial_equity"] for b in bots), "pnl": sum(b["pnl"] for b in bots),
             "fees": sum(b["fees"] for b in bots),
             "completed_trades": sum(b["trades"] for b in bots)}

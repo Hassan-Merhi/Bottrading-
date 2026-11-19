@@ -29,7 +29,7 @@ def arena_page(snap: dict) -> str:
         return head + '<p class="help">The paper arena is switched off in config.yaml.</p>'
     kpis = ('<div class="safety-status-grid">'
             + _status_card("Bots trading", f"{snap['active']} / {snap['max_bots']}",
-                           f"${snap['allocation_usd']:.0f} fake money each")
+                           f"${snap['allocation_usd']:.0f} starting balance for new bots")
             + _status_card("Ahead right now", str(snap.get("profitable", 0)),
                            f"{snap.get('winners', 0)} with enough trades to seed evolution")
             + _status_card("Net result", f"${snap.get('pnl', 0):+.2f}",
