@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import sqlite3
 
+from bots.paper.league import ARENA_PREFIX, account_rows
+
 
 def _tables_available(conn: sqlite3.Connection) -> bool:
     names = {r[0] for r in conn.execute(
@@ -61,15 +63,18 @@ def forward_history(conn: sqlite3.Connection, cfg: dict, name: str = "all",
                      "a model backtest is not forward evidence."}
     if not empty["enabled"] or not _tables_available(conn):
         return empty
-    accounts = [dict(r) for r in conn.execute(
-        "SELECT * FROM lab_accounts ORDER BY name")]
+    accounts = account_rows(conn)
     available = [r["name"] for r in accounts]
     if name != "all" and name not in available:
         raise ValueError("Unknown research paper experiment")
     selected = accounts if name == "all" else [a for a in accounts if a["name"] == name]
     if not selected:
         return empty
-    initial = float((cfg.get("research_league") or {}).get("allocation_usd", 20))
+    initial_by_name = {}
+    for a in selected:
+        settings = "paper_arena" if a["name"].startswith(ARENA_PREFIX) else "research_league"
+        allocation = max(5.0, float((cfg.get(settings) or {}).get("allocation_usd", 20)))
+        initial_by_name[a["name"]] = a["initial_equity"] or allocation
     marks_by_name = {a["name"]: _mark_rows(conn, a["name"], limit) for a in selected}
     if name == "all":
         # A portfolio mark is valid only if all three paper accounts have
@@ -89,7 +94,7 @@ def forward_history(conn: sqlite3.Connection, cfg: dict, name: str = "all",
                 "observed_ms": max(observed) if observed else None,
                 "equity": sum(p["equity"] for p in parts),
                 "benchmark_equity": sum(_benchmark(p["mark_price"], a["hold_start_price"],
-                                                   initial, cfg)
+                                                   initial_by_name[a["name"]], cfg)
                                          for a, p in zip(selected, parts)),
                 "quote_source": "kraken_ticker" if all(
                     p["quote_source"] == "kraken_ticker" for p in parts) else "mixed_or_legacy"})
@@ -99,10 +104,10 @@ def forward_history(conn: sqlite3.Connection, cfg: dict, name: str = "all",
             "candle_ts": p["candle_ts"], "observed_ms": p["observed_ms"],
             "equity": p["equity"],
             "benchmark_equity": _benchmark(p["mark_price"], acc["hold_start_price"],
-                                           initial, cfg),
+                                           initial_by_name[acc["name"]], cfg),
             "quote_source": p["quote_source"] or "legacy_unknown"}
             for p in marks_by_name[acc["name"]]]
-    capital = initial * len(selected)
+    capital = sum(initial_by_name.values())
     for p in rows:
         p["net_pnl"] = p["equity"] - capital
         p["benchmark_net_pnl"] = p["benchmark_equity"] - capital

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
+from bots.data.mood import DAY_MS, store_fear_greed
 from bots.db import connect
 from bots.paper import league
 from bots.research import agent
@@ -73,6 +76,54 @@ def test_paper_league_exits_charge_realistic_fees():
     assert acc["fees"] > 0
     assert conn.execute("SELECT COUNT(*) FROM lab_fills WHERE side='sell'").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM fills").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(("mood_age_days", "expect_fill"), [(1, True), (0, False), (5, False)])
+def test_forward_breakout_requires_known_fresh_mood(mood_age_days, expect_fill):
+    conn = connect(":memory:")
+    now = (1_800_000_000_000 // DAY_MS) * DAY_MS + 3_600_000
+    next_hour = now + 3_600_000
+    base = league.research_genomes()["BTC trend"]
+    genome = Genome.from_dict({**base.to_dict(), "entry_type": "breakout",
+                               "mood_min": 30, "mood_max": 70})
+    seed_candles(conn, now)
+    league.tick_genomes(conn, config(), {"test": genome}, now)
+    seed_candles(conn, next_hour)
+    conn.execute("UPDATE candles SET high=250, close=250 WHERE pair='BTC/USD' AND ts=?",
+                 (next_hour - 900_000,))
+    store_fear_greed(conn, [(now // DAY_MS * DAY_MS - mood_age_days * DAY_MS, 50)])
+
+    league.tick_genomes(conn, config(), {"test": genome}, next_hour)
+    fills = conn.execute("SELECT side FROM lab_fills").fetchall()
+    assert [f["side"] for f in fills] == (["buy"] if expect_fill else [])
+
+
+@pytest.mark.parametrize("has_complete_history", [True, False])
+def test_forward_breakout_uses_completed_trend_reference(has_complete_history):
+    conn = connect(":memory:")
+    day_start = (1_800_000_000_000 // DAY_MS) * DAY_MS
+    now = day_start + 3_600_000
+    next_hour = now + 3_600_000
+    base = league.research_genomes()["ETH pullback"]
+    genome = Genome.from_dict({**base.to_dict(), "entry_type": "breakout",
+                               "trend_filter": "btc_daily", "trend_period": 20})
+    days = 20 if has_complete_history else 19
+    start = day_start - days * DAY_MS
+    conn.executemany(
+        "INSERT INTO candles(pair,timeframe,ts,open,high,low,close,volume)"
+        "VALUES('BTC/USD','15m',?,?,?,?,?,10)",
+        ((ts, price, price, price, price)
+         for ts in range(start, day_start, 900_000)
+         for price in [100 + (ts - start) // DAY_MS]))
+    seed_candles(conn, now)
+    league.tick_genomes(conn, config(), {"test": genome}, now)
+    seed_candles(conn, next_hour)
+    conn.execute("UPDATE candles SET high=250, close=250 WHERE pair='ETH/USD' AND ts=?",
+                 (next_hour - 900_000,))
+
+    league.tick_genomes(conn, config(), {"test": genome}, next_hour)
+    fills = conn.execute("SELECT side FROM lab_fills").fetchall()
+    assert [f["side"] for f in fills] == (["buy"] if has_complete_history else [])
 
 
 def test_research_is_read_only_and_deduplicates(monkeypatch):

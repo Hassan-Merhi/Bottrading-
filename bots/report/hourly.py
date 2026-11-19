@@ -11,7 +11,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from bots.paper.league import ARENA_PREFIX
+from bots.paper.league import account_rows
 from bots.strategy.genome import Genome
 
 HOUR_MS = 3_600_000
@@ -43,12 +43,9 @@ def _iso_ms(text: str | None) -> int | None:
 def _lab_bot_lines(conn: sqlite3.Connection, cfg: dict, now: int, arena: bool) -> tuple[list[str], dict]:
     """One line per paper-league / arena account, with the hour's fills folded in."""
     since = now - HOUR_MS
-    if not _has(conn, "lab_accounts"):
-        return [], {"pnl": 0.0, "hour": 0.0, "n": 0}
-    op = "LIKE" if arena else "NOT LIKE"
-    rows = conn.execute(f"SELECT * FROM lab_accounts WHERE name {op} ? ORDER BY name",
-                        (ARENA_PREFIX + "%",)).fetchall()
-    initial = float((cfg.get("paper_arena" if arena else "research_league") or {}).get("allocation_usd", 20))
+    rows = account_rows(conn, arena=arena)
+    settings = "paper_arena" if arena else "research_league"
+    allocation = max(5.0, float((cfg.get(settings) or {}).get("allocation_usd", 20)))
     lines, total, hour_total = [], 0.0, 0.0
     retired = {}
     if arena and _has(conn, "arena_bots"):
@@ -60,7 +57,7 @@ def _lab_bot_lines(conn: sqlite3.Connection, cfg: dict, now: int, arena: bool) -
         if meta and meta["retired_ms"] and meta["retired_ms"] < since:
             continue  # retired more than an hour ago: no longer reported
         g = Genome.from_dict(json.loads(a["genome_json"]))
-        pnl = float(a["last_equity"]) - initial
+        pnl = float(a["last_equity"]) - (a["initial_equity"] or allocation)
         prev = conn.execute("SELECT equity FROM lab_marks WHERE name=? AND candle_ts <= ? "
                             "ORDER BY candle_ts DESC LIMIT 1", (name, since)).fetchone()
         hour = float(a["last_equity"]) - float(prev[0]) if prev else 0.0

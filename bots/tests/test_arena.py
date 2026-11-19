@@ -7,7 +7,9 @@ import json
 from bots.config import load_config
 from bots.db import connect
 from bots.paper import arena, league
+from bots.paper.forward_history import forward_history
 from bots.paper.league import ARENA_PREFIX
+from bots.report.hourly import hourly_report_text
 from bots.strategy.genome import Genome
 from bots.tests.test_research_league import seed_candles
 from bots.tests.test_strategy import base_genome
@@ -73,6 +75,35 @@ def test_arena_trades_forward_and_stays_out_of_real_money_tables():
     snap = arena.snapshot(conn, cfg(), NOW + HOUR)
     assert snap["active"] == 3 and snap["real_money"] is False and snap["capital"] == 3 * ALLOC
     assert "Paper arena (fake money): 3 bots trading" in arena.text_summary(snap)
+
+
+def test_mixed_allocations_use_each_accounts_original_equity():
+    conn = connect(":memory:")
+    old_cfg = cfg(max_bots=1, allocation_usd=20)
+    new_cfg = cfg(max_bots=2, allocation_usd=100)
+    old_cfg["research_league"]["allocation_usd"] = 20
+    new_cfg["research_league"]["allocation_usd"] = 100
+    fake_run(conn, n=2)
+    arena.refresh_from_run(conn, old_cfg, "run-a", NOW)
+    seed_candles(conn, NOW)
+    arena.tick(conn, old_cfg, NOW)
+    league.tick(conn, old_cfg, NOW)
+    old_bot = arena.active(conn)[0]["name"]
+    arena.refresh_from_run(conn, new_cfg, "run-a", NOW + HOUR)
+    seed_candles(conn, NOW + HOUR)
+    arena.tick(conn, new_cfg, NOW + HOUR)
+    conn.execute("UPDATE lab_accounts SET last_equity=21, closed_trades=10 WHERE name=?", (old_bot,))
+    conn.commit()
+
+    snapshot = arena.snapshot(conn, new_cfg, NOW + HOUR)
+    assert snapshot["capital"] == 120
+    assert snapshot["pnl"] == 1
+    assert snapshot["bots"][0]["return_pct"] == 5
+    assert arena.retire_losers(conn, new_cfg, NOW + HOUR) == 0
+    assert len(arena.forward_winners(conn, new_cfg)) == 1
+    assert league.snapshot(conn, new_cfg)["pnl"] == 0
+    assert forward_history(conn, new_cfg)["stats"]["capital"] == 180
+    assert "+1.00$ since start" in hourly_report_text(conn, new_cfg, NOW + HOUR)
 
 
 def test_losers_are_buried_and_winners_seed_evolution():

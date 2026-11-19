@@ -130,7 +130,7 @@ def tick(conn: sqlite3.Connection, cfg: dict, now: int | None = None,
 def retire_losers(conn: sqlite3.Connection, cfg: dict, now: int) -> int:
     """Bury bots that are clearly losing forward, so evolution learns to avoid them."""
     acfg = _cfg(cfg)
-    initial = max(5.0, float(acfg.get("allocation_usd", 20)))
+    allocation = max(5.0, float(acfg.get("allocation_usd", 20)))
     dd_limit = float(acfg.get("retire_drawdown_pct", 25)) / 100
     min_trades = int(acfg.get("retire_min_trades", 10))
     accounts = {a["name"]: a for a in account_rows(conn, arena=True)}
@@ -140,7 +140,7 @@ def retire_losers(conn: sqlite3.Connection, cfg: dict, now: int) -> int:
         a = accounts.get(r["name"])
         if a is None:
             continue
-        pnl = float(a["last_equity"]) - initial
+        pnl = float(a["last_equity"]) - (a["initial_equity"] or allocation)
         reason = None
         if float(a["max_drawdown"]) >= dd_limit:
             reason = f"forward drawdown {100 * float(a['max_drawdown']):.0f}% beyond {100 * dd_limit:.0f}% limit"
@@ -166,16 +166,19 @@ def forward_winners(conn: sqlite3.Connection, cfg: dict) -> list[Genome]:
     acfg = _cfg(cfg)
     if not acfg.get("enabled", False):
         return []
-    initial = max(5.0, float(acfg.get("allocation_usd", 20)))
+    allocation = max(5.0, float(acfg.get("allocation_usd", 20)))
     min_trades = int(acfg.get("winner_min_trades", 5))
     accounts = {a["name"]: a for a in account_rows(conn, arena=True)}
     scored = []
     for r in active(conn):
         a = accounts.get(r["name"])
-        if a is None or int(a["closed_trades"]) < min_trades or float(a["last_equity"]) <= initial:
+        if a is None or int(a["closed_trades"]) < min_trades:
+            continue
+        initial = a["initial_equity"] or allocation
+        if float(a["last_equity"]) <= initial:
             continue
         try:
-            scored.append((float(a["last_equity"]) - initial, Genome.from_dict(json.loads(r["genome_json"]))))
+            scored.append((float(a["last_equity"]) / initial - 1, Genome.from_dict(json.loads(r["genome_json"]))))
         except (ValueError, TypeError, KeyError):
             continue
     scored.sort(key=lambda t: t[0], reverse=True)
@@ -186,21 +189,22 @@ def snapshot(conn: sqlite3.Connection, cfg: dict, now: int | None = None) -> dic
     acfg = _cfg(cfg)
     now = int(now if now is not None else time.time() * 1000)
     base = {"enabled": bool(acfg.get("enabled", False)), "real_money": False, "simulation": True,
-            "allocation_usd": float(acfg.get("allocation_usd", 20)), "max_bots": int(acfg.get("max_bots", 20))}
+            "allocation_usd": max(5.0, float(acfg.get("allocation_usd", 20))),
+            "max_bots": int(acfg.get("max_bots", 20))}
     if not base["enabled"]:
         return {**base, "bots": [], "retired": [], "active": 0, "pnl": 0.0, "winners": 0}
     ensure_schema(conn)
-    initial = base["allocation_usd"]
     accounts = {a["name"]: a for a in account_rows(conn, arena=True)}
     bots = []
     for r in active(conn):
         a = accounts.get(r["name"])
         g = Genome.from_dict(json.loads(r["genome_json"]))
+        initial = (a["initial_equity"] if a else None) or base["allocation_usd"]
         pnl = (float(a["last_equity"]) - initial) if a else 0.0
         bots.append({"name": r["name"], "pair": g.pair, "timeframe": g.timeframe,
                      "strategy": g.describe(), "run_id": r["run_id"], "train_fitness": r["train_fitness"],
                      "added_ms": r["added_ms"], "days": (now - int(r["added_ms"])) / 86_400_000,
-                     "equity": float(a["last_equity"]) if a else initial, "pnl": pnl,
+                     "equity": float(a["last_equity"]) if a else initial, "initial_equity": initial, "pnl": pnl,
                      "return_pct": 100 * pnl / initial, "trades": int(a["closed_trades"]) if a else 0,
                      "wins": int(a["wins"]) if a else 0, "fees": float(a["fees"]) if a else 0.0,
                      "max_drawdown_pct": 100 * float(a["max_drawdown"]) if a else 0.0,
@@ -213,7 +217,7 @@ def snapshot(conn: sqlite3.Connection, cfg: dict, now: int | None = None) -> dic
     winners = len(forward_winners(conn, cfg))
     return {**base, "bots": bots, "active": len(bots), "retired": retired, "retired_total": int(n_retired),
             "pnl": sum(b["pnl"] for b in bots), "fees": sum(b["fees"] for b in bots),
-            "trades": sum(b["trades"] for b in bots), "capital": initial * len(bots),
+            "trades": sum(b["trades"] for b in bots), "capital": sum(b["initial_equity"] for b in bots),
             "winners": winners, "profitable": sum(1 for b in bots if b["pnl"] > 0)}
 
 
